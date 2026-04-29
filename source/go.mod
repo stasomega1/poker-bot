@@ -1,4 +1,4 @@
-module pocker-bot
+module poker-bot
 
 go 1.22.0
 
@@ -21,3 +21,4 @@ require (
 	golang.org/x/sync v0.8.0 // indirect
 	golang.org/x/text v0.17.0 // indirect
 )
+

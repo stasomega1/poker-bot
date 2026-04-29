@@ -24,7 +24,7 @@ func Load() (Config, error) {
 	cfg := Config{
 		BotToken:      strings.TrimSpace(os.Getenv("BOT_TOKEN")),
 		MongoURI:      strings.TrimSpace(os.Getenv("MONGODB_URI")),
-		MongoDatabase: strings.TrimSpace(getEnv("MONGODB_DB", "pocker_bot")),
+		MongoDatabase: strings.TrimSpace(getEnv("MONGODB_DB", "poker_bot")),
 	}
 
 	price, err := decimal.NewFromString(strings.TrimSpace(getEnv("DEFAULT_BUYIN_PRICE", "2000")))

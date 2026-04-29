@@ -5,7 +5,7 @@ import (
 	"errors"
 	"time"
 
-	"pocker-bot/internal/domain"
+	"poker-bot/internal/domain"
 
 	"github.com/shopspring/decimal"
 	"go.mongodb.org/mongo-driver/bson"
@@ -60,6 +60,30 @@ func (r *AllowedChatRepository) FindActiveByChatID(ctx context.Context, chatID i
 	}
 
 	return document.toDomain()
+}
+
+func (r *AllowedChatRepository) ListActive(ctx context.Context) ([]domain.AllowedChat, error) {
+	cursor, err := r.collection.Find(ctx, bson.M{"is_active": true})
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var documents []allowedChatDocument
+	if err := cursor.All(ctx, &documents); err != nil {
+		return nil, err
+	}
+
+	result := make([]domain.AllowedChat, 0, len(documents))
+	for _, document := range documents {
+		chat, err := document.toDomain()
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, chat)
+	}
+
+	return result, nil
 }
 
 func (r *AllowedChatRepository) UpdateBuyInPrice(ctx context.Context, chatID int64, title string, price decimal.Decimal) (domain.AllowedChat, error) {

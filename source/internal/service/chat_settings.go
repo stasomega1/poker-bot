@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"time"
 
-	"pocker-bot/internal/domain"
-	"pocker-bot/internal/repository"
-	mongorepo "pocker-bot/internal/repository/mongo"
+	"poker-bot/internal/domain"
+	"poker-bot/internal/repository"
+	mongorepo "poker-bot/internal/repository/mongo"
 
 	"github.com/shopspring/decimal"
 )
@@ -40,6 +40,10 @@ func (s *ChatSettingsService) RegisterChat(ctx context.Context, chatID int64, ti
 		CreatedAt: time.Now().UTC(),
 		UpdatedAt: time.Now().UTC(),
 	})
+}
+
+func (s *ChatSettingsService) ListAllowedChats(ctx context.Context) ([]domain.AllowedChat, error) {
+	return s.chatRepo.ListActive(ctx)
 }
 
 func (s *ChatSettingsService) UpdateBuyInPrice(ctx context.Context, chatID int64, title string, price decimal.Decimal) (domain.AllowedChat, error) {

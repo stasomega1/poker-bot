@@ -5,9 +5,9 @@ import (
 	"errors"
 	"fmt"
 
-	"pocker-bot/internal/domain"
-	"pocker-bot/internal/repository"
-	mongorepo "pocker-bot/internal/repository/mongo"
+	"poker-bot/internal/domain"
+	"poker-bot/internal/repository"
+	mongorepo "poker-bot/internal/repository/mongo"
 )
 
 type StatsService struct {

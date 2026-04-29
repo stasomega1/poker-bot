@@ -3,3 +3,5 @@
 rebuild
 Dockerfile
 result.json
+*.json
+*.exe

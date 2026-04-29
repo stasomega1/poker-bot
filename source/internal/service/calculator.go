@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"pocker-bot/internal/domain"
+	"poker-bot/internal/domain"
 
 	"github.com/shopspring/decimal"
 )

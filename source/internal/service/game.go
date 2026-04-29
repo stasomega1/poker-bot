@@ -5,9 +5,9 @@ import (
 	"errors"
 	"fmt"
 
-	"pocker-bot/internal/domain"
-	"pocker-bot/internal/repository"
-	mongorepo "pocker-bot/internal/repository/mongo"
+	"poker-bot/internal/domain"
+	"poker-bot/internal/repository"
+	mongorepo "poker-bot/internal/repository/mongo"
 )
 
 type GameService struct {
@@ -44,7 +44,7 @@ func (s *GameService) SaveGame(ctx context.Context, request domain.GameRequest) 
 	chat, err := s.chatRepo.FindActiveByChatID(ctx, request.ChatID)
 	if err != nil {
 		if errors.Is(err, mongorepo.ErrChatNotFound) {
-			return domain.Game{}, fmt.Errorf("Данный чат не зарегистрирован для игры")
+			return domain.Game{}, fmt.Errorf("чат не зарегистрирован для игры")
 		}
 		return domain.Game{}, err
 	}
@@ -66,7 +66,7 @@ func (s *GameService) SaveGame(ctx context.Context, request domain.GameRequest) 
 func (s *GameService) History(ctx context.Context, chatID int64, limit int64) ([]domain.Game, error) {
 	if _, err := s.chatRepo.FindActiveByChatID(ctx, chatID); err != nil {
 		if errors.Is(err, mongorepo.ErrChatNotFound) {
-			return nil, fmt.Errorf("Данный чат не зарегистрирован для игры")
+			return nil, fmt.Errorf("чат не зарегистрирован для игры")
 		}
 		return nil, err
 	}

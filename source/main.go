@@ -8,8 +8,8 @@ import (
 	"syscall"
 	"time"
 
-	"pocker-bot/internal/app"
-	"pocker-bot/internal/config"
+	"poker-bot/internal/app"
+	"poker-bot/internal/config"
 )
 
 func main() {
