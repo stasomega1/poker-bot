@@ -161,7 +161,7 @@ func (b *Bot) handleMessage(ctx context.Context, message *tgbotapi.Message) {
 
 	switch message.Command() {
 	case "start", "help":
-		b.reply(message.Chat.ID, message.MessageID, helpText())
+		b.replyHTML(message.Chat.ID, message.MessageID, helpText())
 	case "setbuyin":
 		b.handleSetBuyIn(ctx, message)
 	case "game":
@@ -184,7 +184,7 @@ func (b *Bot) handlePrivateMessage(ctx context.Context, message *tgbotapi.Messag
 
 	switch message.Command() {
 	case "start", "help":
-		b.reply(message.Chat.ID, message.MessageID, personalHelpText())
+		b.replyHTML(message.Chat.ID, message.MessageID, personalHelpText())
 	case "groups":
 		b.handlePrivateGroups(ctx, message)
 	case "stats":
@@ -286,24 +286,24 @@ func (b *Bot) handleSetBuyIn(ctx context.Context, message *tgbotapi.Message) {
 
 func (b *Bot) handleGame(ctx context.Context, message *tgbotapi.Message) {
 	if message.ReplyToMessage == nil {
-		b.reply(message.Chat.ID, message.MessageID, "Команда /game должна быть ответом на сообщение с результатами.")
+		b.replyHTML(message.Chat.ID, message.MessageID, "Команда /game должна быть ответом на сообщение с результатами.\n\n"+gameUsageExampleHTML())
 		return
 	}
 
 	resultsRef := b.messageStore.Get(message.Chat.ID, message.ReplyToMessage.MessageID)
 	if resultsRef == nil {
-		b.reply(message.Chat.ID, message.MessageID, "Не удалось найти сообщение с результатами среди последних сообщений чата.")
+		b.replyHTML(message.Chat.ID, message.MessageID, "Не удалось найти сообщение с результатами среди последних сообщений чата.\n\n"+gameUsageExampleHTML())
 		return
 	}
 
 	if resultsRef.ReplyToMessageID == 0 {
-		b.reply(message.Chat.ID, message.MessageID, "Сообщение с результатами должно быть reply на сообщение с байинами.")
+		b.replyHTML(message.Chat.ID, message.MessageID, "Сообщение с результатами должно быть reply на сообщение с бай-инами.\n\n"+gameUsageExampleHTML())
 		return
 	}
 
 	buyInsRef := b.messageStore.Get(message.Chat.ID, resultsRef.ReplyToMessageID)
 	if buyInsRef == nil {
-		b.reply(message.Chat.ID, message.MessageID, "Не удалось найти сообщение с байинами среди последних сообщений чата.")
+		b.replyHTML(message.Chat.ID, message.MessageID, "Не удалось найти сообщение с бай-инами среди последних сообщений чата.\n\n"+gameUsageExampleHTML())
 		return
 	}
 
@@ -757,23 +757,32 @@ func isArchiveAllowedChatID(chatID int64) bool {
 
 func personalHelpText() string {
 	return strings.Join([]string{
-		"Бот поддерживает личные сообщения.",
+		"Бот для учета покерных игр и расчета итогов",
 		"",
-		"Команды в личке:",
-		"/start",
-		"/help",
-		"/groups",
-		"/stats",
-		"/history",
-		"/players",
-		"/archive",
-		"",
-		"Если вы состоите в нескольких игровых группах, бот предложит выбрать нужную через кнопки.",
+		"Поддерживаемые команды",
+		"/start /help - показать это сообщение",
+		"/reg - зарегистрировать группу для игр (доступно только администратору бота)",
+		"/game - подсчитать результаты игры (доступно из зарегистрированной группы)",
+		"/setbuyin 2500 - изменить цену байина (2000 по умолчанию, доступно из зарегистрированной группы)",
+		"/groups - показать доступные игровые группы",
+		"/stats - показать статистику игр",
+		"/history - показать историю игр",
+		"/players - показать статистику игроков",
+		"/archive - открыть архив игр",
 	}, "\n")
 }
 
 func (b *Bot) reply(chatID int64, replyTo int, text string) {
 	msg := tgbotapi.NewMessage(chatID, text)
+	if replyTo != 0 {
+		msg.ReplyToMessageID = replyTo
+	}
+	_, _ = b.api.Send(msg)
+}
+
+func (b *Bot) replyHTML(chatID int64, replyTo int, text string) {
+	msg := tgbotapi.NewMessage(chatID, text)
+	msg.ParseMode = tgbotapi.ModeHTML
 	if replyTo != 0 {
 		msg.ReplyToMessageID = replyTo
 	}
