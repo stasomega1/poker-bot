@@ -31,10 +31,16 @@ type ArchiveStats struct {
 	TotalBuyIns        float64
 	AverageBank        float64
 	MaxBank            float64
+	MaxBankGameNumber  int
+	MaxBankSessionDate string
 	MinBank            float64
+	MinBankGameNumber  int
+	MinBankSessionDate string
 	AveragePlayerCount float64
 	BiggestWin         float64
 	BiggestWinPlayer   string
+	BiggestWinGame     int
+	BiggestWinDate     string
 	MostActivePlayer   string
 	MostActiveGames    int
 }

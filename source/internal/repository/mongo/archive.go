@@ -63,9 +63,13 @@ func (r *ArchiveRepository) BuildStatsByChatID(ctx context.Context, chatID int64
 
 		if i == 0 || game.BuyInsTotal > stats.MaxBank {
 			stats.MaxBank = game.BuyInsTotal
+			stats.MaxBankGameNumber = game.GameNumber
+			stats.MaxBankSessionDate = game.SessionDate
 		}
 		if i == 0 || game.BuyInsTotal < stats.MinBank {
 			stats.MinBank = game.BuyInsTotal
+			stats.MinBankGameNumber = game.GameNumber
+			stats.MinBankSessionDate = game.SessionDate
 		}
 
 		for _, player := range game.Players {
@@ -73,6 +77,8 @@ func (r *ArchiveRepository) BuildStatsByChatID(ctx context.Context, chatID int64
 			if stats.BiggestWinPlayer == "" || player.ProfitBuyIns > stats.BiggestWin {
 				stats.BiggestWin = player.ProfitBuyIns
 				stats.BiggestWinPlayer = player.Name
+				stats.BiggestWinGame = game.GameNumber
+				stats.BiggestWinDate = game.SessionDate
 			}
 		}
 	}

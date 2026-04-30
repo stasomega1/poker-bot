@@ -53,13 +53,13 @@ func renderArchiveStats(stats domain.ArchiveStats) string {
 		fmt.Sprintf("Игр: %d", stats.GamesCount),
 		fmt.Sprintf("Всего бай-инов: %s", formatArchiveNumber(stats.TotalBuyIns)),
 		fmt.Sprintf("Средний банк: %s", formatArchiveNumber(stats.AverageBank)),
-		fmt.Sprintf("Максимальный банк: %s", formatArchiveNumber(stats.MaxBank)),
-		fmt.Sprintf("Минимальный банк: %s", formatArchiveNumber(stats.MinBank)),
+		fmt.Sprintf("Максимальный банк: %s%s", formatArchiveNumber(stats.MaxBank), formatArchiveGameRef(stats.MaxBankGameNumber, stats.MaxBankSessionDate)),
+		fmt.Sprintf("Минимальный банк: %s%s", formatArchiveNumber(stats.MinBank), formatArchiveGameRef(stats.MinBankGameNumber, stats.MinBankSessionDate)),
 		fmt.Sprintf("Среднее число игроков: %s", formatArchiveNumber(stats.AveragePlayerCount)),
 	}
 
 	if stats.BiggestWinPlayer != "" {
-		lines = append(lines, fmt.Sprintf("Лучший результат за игру: %s — %s", formatArchiveSigned(stats.BiggestWin), stats.BiggestWinPlayer))
+		lines = append(lines, fmt.Sprintf("Лучший результат за игру: %s — %s%s", formatArchiveSigned(stats.BiggestWin), stats.BiggestWinPlayer, formatArchiveGameRef(stats.BiggestWinGame, stats.BiggestWinDate)))
 	}
 	if stats.MostActivePlayer != "" {
 		lines = append(lines, fmt.Sprintf("Самый активный игрок: %s (%d игр)", stats.MostActivePlayer, stats.MostActiveGames))
@@ -221,4 +221,11 @@ func formatArchiveSigned(value float64) string {
 		return "+" + formatArchiveNumber(value)
 	}
 	return formatArchiveNumber(value)
+}
+
+func formatArchiveGameRef(gameNumber int, sessionDate string) string {
+	if gameNumber <= 0 {
+		return ""
+	}
+	return fmt.Sprintf(" (в игре %d, %s)", gameNumber, formatArchiveDate(time.Time{}, sessionDate))
 }

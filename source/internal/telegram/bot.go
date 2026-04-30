@@ -25,8 +25,9 @@ const (
 )
 
 var archiveAllowedChatIDs = map[int64]struct{}{
-	1817456467: {},
-	-507643501: {},
+	1817456467:     {},
+	-507643501:     {},
+	-1001817456467: {},
 }
 
 type Bot struct {
