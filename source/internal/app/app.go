@@ -23,6 +23,7 @@ func New(cfg config.Config) (*App, error) {
 	chatRepo := mongostorage.NewAllowedChatRepository(client.Database, cfg.DefaultBuyInPrice)
 	gameRepo := mongostorage.NewGameRepository(client.Database)
 	archiveRepo := mongostorage.NewArchiveRepository(client.Database)
+	billRepo := mongostorage.NewBillSessionRepository(client.Database)
 
 	calculator := service.NewSettlementCalculator()
 	parser := service.NewMessageParser()
@@ -30,8 +31,13 @@ func New(cfg config.Config) (*App, error) {
 	settingsService := service.NewChatSettingsService(chatRepo)
 	statsService := service.NewStatsService(gameRepo, chatRepo)
 	archiveService := service.NewArchiveService(archiveRepo)
+	var receiptOCR service.ReceiptOCR
+	if cfg.OpenAIAPIKey != "" {
+		receiptOCR = service.NewOpenAIReceiptOCR(cfg.OpenAIAPIKey, cfg.OpenAIReceiptModel)
+	}
+	billService := service.NewBillService(billRepo, chatRepo, receiptOCR)
 
-	bot, err := telegram.NewBot(cfg, gameService, settingsService, statsService, archiveService)
+	bot, err := telegram.NewBot(cfg, gameService, settingsService, statsService, archiveService, billService)
 	if err != nil {
 		_ = client.Close(context.Background())
 		return nil, err

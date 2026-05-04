@@ -19,12 +19,20 @@ type Game struct {
 	ID                     string          `bson:"_id,omitempty"`
 	ChatID                 int64           `bson:"chat_id"`
 	ChatTitle              string          `bson:"chat_title"`
+	GameNumber             int             `bson:"game_number"`
+	SessionDate            string          `bson:"session_date"`
 	BuyInPriceKZT          decimal.Decimal `bson:"buyin_price_kzt"`
 	SourceBuyInsMessageID  int             `bson:"source_buyins_message_id"`
 	SourceResultsMessageID int             `bson:"source_results_message_id"`
 	SourceCommandMessageID int             `bson:"source_command_message_id"`
 	SourceBuyInsText       string          `bson:"source_buyins_text"`
 	SourceResultsText      string          `bson:"source_results_text"`
+	PlayerCount            int             `bson:"player_count"`
+	Winners                []string        `bson:"winners"`
+	WinnersCount           int             `bson:"winners_count"`
+	TopWinner              string          `bson:"top_winner"`
+	TopWinnerProfit        decimal.Decimal `bson:"top_winner_profit"`
+	ResultsTotal           decimal.Decimal `bson:"results_total"`
 	Players                []PlayerResult  `bson:"players"`
 	Settlements            []Settlement    `bson:"settlements"`
 	TotalBuyIns            decimal.Decimal `bson:"total_buyins"`
@@ -56,6 +64,7 @@ type Settlement struct {
 type GameRequest struct {
 	ChatID           int64
 	ChatTitle        string
+	SessionDate      string
 	BuyInPriceKZT    decimal.Decimal
 	BuyInsMessageID  int
 	ResultsMessageID int
@@ -84,4 +93,27 @@ type PlayerStats struct {
 	TotalWonBuyIns decimal.Decimal
 	TotalProfit    decimal.Decimal
 	AverageProfit  decimal.Decimal
+	BiggestWin     decimal.Decimal
+	BiggestLoss    decimal.Decimal
+	WinningGames   int64
+	LosingGames    int64
+	NeutralGames   int64
+}
+
+type NumberedGame struct {
+	Game Game
+}
+
+type GamePlayerHistoryEntry struct {
+	GameNumber   int
+	SessionDate  string
+	CreatedAt    time.Time
+	BuyIns       decimal.Decimal
+	WonBuyIns    decimal.Decimal
+	ProfitBuyIns decimal.Decimal
+}
+
+type GamePlayerHistory struct {
+	Player PlayerStats
+	Games  []GamePlayerHistoryEntry
 }

@@ -56,6 +56,12 @@ func (s *GameService) SaveGame(ctx context.Context, request domain.GameRequest) 
 		return domain.Game{}, err
 	}
 
+	gameNumber, err := s.gameRepo.NextGameNumber(ctx, request.ChatID)
+	if err != nil {
+		return domain.Game{}, err
+	}
+	game.GameNumber = gameNumber
+
 	if err := s.gameRepo.Create(ctx, game); err != nil {
 		return domain.Game{}, err
 	}

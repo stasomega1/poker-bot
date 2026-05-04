@@ -63,11 +63,15 @@ func (c *SettlementCalculator) BuildGame(request domain.GameRequest) (domain.Gam
 	players := make([]domain.PlayerResult, 0, len(request.BuyIns))
 	debtors := make([]ledgerEntry, 0)
 	creditors := make([]ledgerEntry, 0)
+	winners := make([]string, 0, len(request.Winners))
+	topWinner := ""
+	topWinnerProfit := decimal.Zero
 
 	for _, entry := range request.BuyIns {
 		won := decimal.Zero
 		if winner, ok := winnersByName[normalizeName(entry.Name)]; ok {
 			won = winner.Amount
+			winners = append(winners, entry.Name)
 		}
 
 		profitBuyIns := won.Sub(entry.Amount)
@@ -84,6 +88,10 @@ func (c *SettlementCalculator) BuildGame(request domain.GameRequest) (domain.Gam
 		switch {
 		case profitBuyIns.GreaterThan(decimal.Zero):
 			creditors = append(creditors, ledgerEntry{Name: entry.Name, Amount: profitBuyIns})
+			if topWinner == "" || profitBuyIns.GreaterThan(topWinnerProfit) {
+				topWinner = entry.Name
+				topWinnerProfit = profitBuyIns
+			}
 		case profitBuyIns.LessThan(decimal.Zero):
 			debtors = append(debtors, ledgerEntry{Name: entry.Name, Amount: profitBuyIns.Abs()})
 		}
@@ -92,16 +100,24 @@ func (c *SettlementCalculator) BuildGame(request domain.GameRequest) (domain.Gam
 	sort.Slice(players, func(i, j int) bool {
 		return players[i].ProfitBuyIns.GreaterThan(players[j].ProfitBuyIns)
 	})
+	sort.Strings(winners)
 
 	return domain.Game{
 		ChatID:                 request.ChatID,
 		ChatTitle:              request.ChatTitle,
+		SessionDate:            request.SessionDate,
 		BuyInPriceKZT:          request.BuyInPriceKZT,
 		SourceBuyInsMessageID:  request.BuyInsMessageID,
 		SourceResultsMessageID: request.ResultsMessageID,
 		SourceCommandMessageID: request.CommandMessageID,
 		SourceBuyInsText:       request.BuyInsText,
 		SourceResultsText:      request.ResultsText,
+		PlayerCount:            len(request.BuyIns),
+		Winners:                winners,
+		WinnersCount:           len(winners),
+		TopWinner:              topWinner,
+		TopWinnerProfit:        topWinnerProfit,
+		ResultsTotal:           winsTotal,
 		Players:                players,
 		Settlements:            buildSettlements(debtors, creditors, request.BuyInPriceKZT),
 		TotalBuyIns:            buyInsTotal,

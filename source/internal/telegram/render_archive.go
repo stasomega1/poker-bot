@@ -13,16 +13,19 @@ import (
 
 func renderArchiveHelpText() string {
 	return strings.Join([]string{
-		"Команды архива:",
-		"/archive",
-		"/archive_history",
-		"/archive_stats",
-		"/archive_players",
-		"/archive_game <номер>",
-		"/archive_player <имя>",
-		"/archive_top",
+		"Все игры из архива перенесены в основные команды.",
 		"",
-		"Архив доступен только в архивной группе и в личке ее участникам.",
+		"Используйте:",
+		"/stats - общая статистика",
+		"/history - история игр",
+		"/players - статистика игроков",
+		"",
+		"Дополнительно:",
+		"/stats_history",
+		"/stats_players",
+		"/stats_game <номер>",
+		"/stats_player <имя>",
+		"/stats_top",
 	}, "\n")
 }
 

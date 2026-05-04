@@ -11,20 +11,24 @@ import (
 )
 
 type Config struct {
-	BotToken          string
-	MongoURI          string
-	MongoDatabase     string
-	DefaultBuyInPrice decimal.Decimal
-	RegistrarUserID   int64
+	BotToken           string
+	MongoURI           string
+	MongoDatabase      string
+	DefaultBuyInPrice  decimal.Decimal
+	RegistrarUserID    int64
+	OpenAIAPIKey       string
+	OpenAIReceiptModel string
 }
 
 func Load() (Config, error) {
 	_ = godotenv.Load()
 
 	cfg := Config{
-		BotToken:      strings.TrimSpace(os.Getenv("BOT_TOKEN")),
-		MongoURI:      strings.TrimSpace(os.Getenv("MONGODB_URI")),
-		MongoDatabase: strings.TrimSpace(getEnv("MONGODB_DB", "poker_bot")),
+		BotToken:           strings.TrimSpace(os.Getenv("BOT_TOKEN")),
+		MongoURI:           strings.TrimSpace(os.Getenv("MONGODB_URI")),
+		MongoDatabase:      strings.TrimSpace(getEnv("MONGODB_DB", "poker_bot")),
+		OpenAIAPIKey:       strings.TrimSpace(getEnv("OPENAI_API_KEY", getEnv("OPEN_API_KEY", ""))),
+		OpenAIReceiptModel: strings.TrimSpace(getEnv("OPENAI_RECEIPT_MODEL", "gpt-4.1-mini")),
 	}
 
 	price, err := decimal.NewFromString(strings.TrimSpace(getEnv("DEFAULT_BUYIN_PRICE", "2000")))

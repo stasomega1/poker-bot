@@ -2,6 +2,7 @@ package mongo
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"time"
 
@@ -49,6 +50,103 @@ func (r *GameRepository) ListRecentByChatID(ctx context.Context, chatID int64, l
 	}
 
 	return games, nil
+}
+
+func (r *GameRepository) ListAllByChatID(ctx context.Context, chatID int64) ([]domain.Game, error) {
+	opts := options.Find().SetSort(bson.D{{Key: "created_at", Value: 1}})
+	cursor, err := r.collection.Find(ctx, bson.M{"chat_id": chatID}, opts)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var documents []gameDocument
+	if err := cursor.All(ctx, &documents); err != nil {
+		return nil, err
+	}
+
+	games := make([]domain.Game, 0, len(documents))
+	for _, document := range documents {
+		game, err := document.toDomain()
+		if err != nil {
+			return nil, err
+		}
+		games = append(games, game)
+	}
+
+	return games, nil
+}
+
+func (r *GameRepository) FindByChatIDAndGameNumber(ctx context.Context, chatID int64, gameNumber int) (domain.Game, error) {
+	var document gameDocument
+	err := r.collection.FindOne(ctx, bson.M{"chat_id": chatID, "game_number": gameNumber}).Decode(&document)
+	if errors.Is(err, driver.ErrNoDocuments) {
+		return domain.Game{}, ErrGameNotFound
+	}
+	if err != nil {
+		return domain.Game{}, err
+	}
+	return document.toDomain()
+}
+
+func (r *GameRepository) NextGameNumber(ctx context.Context, chatID int64) (int, error) {
+	opts := options.FindOne().SetSort(bson.D{{Key: "game_number", Value: -1}})
+	var document gameDocument
+	err := r.collection.FindOne(ctx, bson.M{"chat_id": chatID}, opts).Decode(&document)
+	if errors.Is(err, driver.ErrNoDocuments) {
+		return 1, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return document.GameNumber + 1, nil
+}
+
+func (r *GameRepository) BackfillGameNumbers(ctx context.Context) error {
+	chatIDs, err := r.collection.Distinct(ctx, "chat_id", bson.M{})
+	if err != nil {
+		return err
+	}
+
+	for _, rawChatID := range chatIDs {
+		chatID, ok := rawChatID.(int64)
+		if !ok {
+			if numberLong, ok := rawChatID.(interface{ Int64() int64 }); ok {
+				chatID = numberLong.Int64()
+			} else {
+				continue
+			}
+		}
+
+		opts := options.Find().SetSort(bson.D{{Key: "created_at", Value: 1}, {Key: "_id", Value: 1}})
+		cursor, err := r.collection.Find(ctx, bson.M{"chat_id": chatID}, opts)
+		if err != nil {
+			return err
+		}
+
+		var documents []gameDocument
+		if err := cursor.All(ctx, &documents); err != nil {
+			cursor.Close(ctx)
+			return err
+		}
+		cursor.Close(ctx)
+
+		for i, document := range documents {
+			if _, err := r.collection.UpdateOne(ctx, bson.M{
+				"chat_id":                   chatID,
+				"source_buyins_message_id":  document.SourceBuyInsMessageID,
+				"source_results_message_id": document.SourceResultsMessageID,
+				"source_command_message_id": document.SourceCommandMessageID,
+				"created_at":                document.CreatedAt,
+			}, bson.M{
+				"$set": bson.M{"game_number": i + 1},
+			}); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
 }
 
 func (r *GameRepository) BuildStatsByChatID(ctx context.Context, chatID int64) (domain.Stats, error) {
@@ -117,7 +215,10 @@ func (r *GameRepository) BuildPlayerStatsByChatID(ctx context.Context, chatID in
 		for _, player := range game.Players {
 			aggregate, ok := aggregates[player.Name]
 			if !ok {
-				aggregate = &domain.PlayerStats{Name: player.Name}
+				aggregate = &domain.PlayerStats{
+					Name:        player.Name,
+					BiggestLoss: player.ProfitBuyIns,
+				}
 				aggregates[player.Name] = aggregate
 			}
 
@@ -125,6 +226,22 @@ func (r *GameRepository) BuildPlayerStatsByChatID(ctx context.Context, chatID in
 			aggregate.TotalBuyIns = aggregate.TotalBuyIns.Add(player.BuyIns)
 			aggregate.TotalWonBuyIns = aggregate.TotalWonBuyIns.Add(player.WonBuyIns)
 			aggregate.TotalProfit = aggregate.TotalProfit.Add(player.ProfitBuyIns)
+
+			if player.ProfitBuyIns.GreaterThan(aggregate.BiggestWin) {
+				aggregate.BiggestWin = player.ProfitBuyIns
+			}
+			if player.ProfitBuyIns.LessThan(aggregate.BiggestLoss) {
+				aggregate.BiggestLoss = player.ProfitBuyIns
+			}
+
+			switch {
+			case player.ProfitBuyIns.GreaterThan(decimal.Zero):
+				aggregate.WinningGames++
+			case player.ProfitBuyIns.LessThan(decimal.Zero):
+				aggregate.LosingGames++
+			default:
+				aggregate.NeutralGames++
+			}
 		}
 	}
 
@@ -153,12 +270,20 @@ func (r *GameRepository) BuildPlayerStatsByChatID(ctx context.Context, chatID in
 type gameDocument struct {
 	ChatID                 int64                `bson:"chat_id"`
 	ChatTitle              string               `bson:"chat_title"`
+	GameNumber             int                  `bson:"game_number"`
+	SessionDate            string               `bson:"session_date"`
 	BuyInPriceKZT          string               `bson:"buyin_price_kzt"`
 	SourceBuyInsMessageID  int                  `bson:"source_buyins_message_id"`
 	SourceResultsMessageID int                  `bson:"source_results_message_id"`
 	SourceCommandMessageID int                  `bson:"source_command_message_id"`
 	SourceBuyInsText       string               `bson:"source_buyins_text"`
 	SourceResultsText      string               `bson:"source_results_text"`
+	PlayerCount            int                  `bson:"player_count"`
+	Winners                []string             `bson:"winners"`
+	WinnersCount           int                  `bson:"winners_count"`
+	TopWinner              string               `bson:"top_winner"`
+	TopWinnerProfit        string               `bson:"top_winner_profit"`
+	ResultsTotal           string               `bson:"results_total"`
 	Players                []playerDocument     `bson:"players"`
 	Settlements            []settlementDocument `bson:"settlements"`
 	TotalBuyIns            string               `bson:"total_buyins"`
@@ -207,12 +332,20 @@ func gameDocumentFromDomain(game domain.Game) gameDocument {
 	return gameDocument{
 		ChatID:                 game.ChatID,
 		ChatTitle:              game.ChatTitle,
+		GameNumber:             game.GameNumber,
+		SessionDate:            game.SessionDate,
 		BuyInPriceKZT:          game.BuyInPriceKZT.String(),
 		SourceBuyInsMessageID:  game.SourceBuyInsMessageID,
 		SourceResultsMessageID: game.SourceResultsMessageID,
 		SourceCommandMessageID: game.SourceCommandMessageID,
 		SourceBuyInsText:       game.SourceBuyInsText,
 		SourceResultsText:      game.SourceResultsText,
+		PlayerCount:            game.PlayerCount,
+		Winners:                game.Winners,
+		WinnersCount:           game.WinnersCount,
+		TopWinner:              game.TopWinner,
+		TopWinnerProfit:        game.TopWinnerProfit.String(),
+		ResultsTotal:           game.ResultsTotal.String(),
 		Players:                players,
 		Settlements:            settlements,
 		TotalBuyIns:            game.TotalBuyIns.String(),
@@ -230,6 +363,20 @@ func (d gameDocument) toDomain() (domain.Game, error) {
 	totalBuyIns, err := decimal.NewFromString(d.TotalBuyIns)
 	if err != nil {
 		return domain.Game{}, err
+	}
+	topWinnerProfit := decimal.Zero
+	if d.TopWinnerProfit != "" {
+		topWinnerProfit, err = decimal.NewFromString(d.TopWinnerProfit)
+		if err != nil {
+			return domain.Game{}, err
+		}
+	}
+	resultsTotal := decimal.Zero
+	if d.ResultsTotal != "" {
+		resultsTotal, err = decimal.NewFromString(d.ResultsTotal)
+		if err != nil {
+			return domain.Game{}, err
+		}
 	}
 
 	players := make([]domain.PlayerResult, 0, len(d.Players))
@@ -282,12 +429,20 @@ func (d gameDocument) toDomain() (domain.Game, error) {
 	return domain.Game{
 		ChatID:                 d.ChatID,
 		ChatTitle:              d.ChatTitle,
+		GameNumber:             d.GameNumber,
+		SessionDate:            d.SessionDate,
 		BuyInPriceKZT:          price,
 		SourceBuyInsMessageID:  d.SourceBuyInsMessageID,
 		SourceResultsMessageID: d.SourceResultsMessageID,
 		SourceCommandMessageID: d.SourceCommandMessageID,
 		SourceBuyInsText:       d.SourceBuyInsText,
 		SourceResultsText:      d.SourceResultsText,
+		PlayerCount:            d.PlayerCount,
+		Winners:                d.Winners,
+		WinnersCount:           d.WinnersCount,
+		TopWinner:              d.TopWinner,
+		TopWinnerProfit:        topWinnerProfit,
+		ResultsTotal:           resultsTotal,
 		Players:                players,
 		Settlements:            settlements,
 		TotalBuyIns:            totalBuyIns,
