@@ -29,7 +29,7 @@ func NewBillService(billRepo repository.BillSessionRepository, chatRepo reposito
 	}
 }
 
-func (s *BillService) CreateFromReceipt(ctx context.Context, chatID int64, chatTitle string, creatorUserID int64, creatorName string, payerUserID int64, payerName string, photoFileID string, photoMessageID int, image []byte, mimeType string) (domain.BillSession, error) {
+func (s *BillService) CreateFromReceipt(ctx context.Context, chatID int64, chatTitle string, creatorUserID int64, creatorName string, payerUserID int64, payerName string, photoFileID string, photoMessageID int, image []byte, mimeType string, onRetry func()) (domain.BillSession, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -40,7 +40,7 @@ func (s *BillService) CreateFromReceipt(ctx context.Context, chatID int64, chatT
 		return domain.BillSession{}, fmt.Errorf("OCR для чеков не настроен")
 	}
 
-	parsed, err := s.ocr.ParseReceipt(ctx, image, mimeType)
+	parsed, err := s.ocr.ParseReceipt(ctx, image, mimeType, onRetry)
 	if err != nil {
 		return domain.BillSession{}, err
 	}
@@ -89,6 +89,7 @@ func (s *BillService) createSessionFromParsedReceipt(ctx context.Context, chatID
 		SourcePhotoFileID:    photoFileID,
 		SourcePhotoMessageID: photoMessageID,
 		MerchantName:         parsed.MerchantName,
+		RecognitionAttempts:  parsed.Attempts,
 		Items:                items,
 		Assignments:          []domain.BillAssignment{},
 		ServiceAmount:        parsed.ServiceAmount,
@@ -174,6 +175,82 @@ func (s *BillService) AdjustItem(ctx context.Context, sessionID string, userID i
 		return domain.BillSession{}, fmt.Errorf("некорректное состояние распределения")
 	}
 
+	if err := s.billRepo.Update(ctx, session); err != nil {
+		return domain.BillSession{}, err
+	}
+	return session, nil
+}
+
+func (s *BillService) SplitItemIntoSingles(ctx context.Context, sessionID string, itemIndex int) (domain.BillSession, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	session, err := s.billRepo.FindByID(ctx, sessionID)
+	if err != nil {
+		return domain.BillSession{}, err
+	}
+	if session.Status != domain.BillSessionActive {
+		return domain.BillSession{}, fmt.Errorf("счет уже закрыт")
+	}
+
+	targetPos := -1
+	for i := range session.Items {
+		if session.Items[i].Index == itemIndex {
+			targetPos = i
+			break
+		}
+	}
+	if targetPos == -1 {
+		return domain.BillSession{}, fmt.Errorf("позиция не найдена")
+	}
+
+	target := session.Items[targetPos]
+	if target.Quantity <= 1 {
+		return domain.BillSession{}, fmt.Errorf("позицию нельзя разбить")
+	}
+	if target.Assigned != 0 {
+		return domain.BillSession{}, fmt.Errorf("позицию можно разбить только до распределения")
+	}
+
+	newItems := make([]domain.BillItem, 0, len(session.Items)-1+target.Quantity)
+	oldIndexToNew := make(map[int]int, len(session.Items))
+
+	for i, item := range session.Items {
+		if i != targetPos {
+			newItems = append(newItems, item)
+			continue
+		}
+
+		unitLineTotal := target.LineTotal.Div(decimal.NewFromInt(int64(target.Quantity)))
+		for j := 0; j < target.Quantity; j++ {
+			newItems = append(newItems, domain.BillItem{
+				Name:      target.Name,
+				Quantity:  1,
+				UnitPrice: target.UnitPrice,
+				LineTotal: unitLineTotal,
+				Assigned:  0,
+				Remaining: 1,
+			})
+		}
+	}
+
+	for i := range newItems {
+		oldIndex := newItems[i].Index
+		newItems[i].Index = i + 1
+		if oldIndex != 0 {
+			oldIndexToNew[oldIndex] = newItems[i].Index
+		}
+	}
+
+	for i := range session.Assignments {
+		newIndex, ok := oldIndexToNew[session.Assignments[i].ItemIndex]
+		if !ok {
+			return domain.BillSession{}, fmt.Errorf("не удалось обновить назначения после разбивки")
+		}
+		session.Assignments[i].ItemIndex = newIndex
+	}
+
+	session.Items = newItems
 	if err := s.billRepo.Update(ctx, session); err != nil {
 		return domain.BillSession{}, err
 	}

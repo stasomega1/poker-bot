@@ -64,6 +64,8 @@ const (
 	billFinishForcePrefix    = "bill_finish_force:"
 	billCancelForcePrefix    = "bill_cancel_force:"
 	billSendMyCallbackPrefix = "bill_send_my:"
+	billSplitMenuPrefix      = "bill_split_menu:"
+	billSplitItemPrefix      = "bill_split_item:"
 	billCloseNoopPrefix      = "bill_close_noop"
 	billHintPrefix           = "bill_hint"
 )
@@ -402,6 +404,61 @@ func (b *Bot) handleCallbackQuery(ctx context.Context, query *tgbotapi.CallbackQ
 		}
 
 		b.answerCallback(query.ID, "Счет отправлен в личку.")
+		return
+	}
+
+	if sessionID, ok := parseBillSplitMenuCallback(query.Data); ok {
+		session, err := b.billService.GetActive(ctx, query.Message.Chat.ID)
+		if err != nil {
+			b.answerCallback(query.ID, "Не удалось получить счет.")
+			return
+		}
+		if session.ID != sessionID {
+			b.answerCallback(query.ID, "Счет уже изменился.")
+			return
+		}
+
+		splittable := make([]domain.BillItem, 0)
+		for _, item := range session.Items {
+			if item.Quantity > 1 && item.Assigned == 0 {
+				splittable = append(splittable, item)
+			}
+		}
+		if len(splittable) == 0 {
+			b.answerCallback(query.ID, "Нет позиций, которые можно разбить.")
+			return
+		}
+
+		b.answerCallback(query.ID, "")
+		b.sendBillSplitChoice(query.Message.Chat.ID, query.Message.MessageID, session.ID, splittable)
+		return
+	}
+
+	if sessionID, itemIndex, ok := parseBillSplitItemCallback(query.Data); ok {
+		session, err := b.billService.GetActive(ctx, query.Message.Chat.ID)
+		if err != nil {
+			b.answerCallback(query.ID, "Не удалось получить счет.")
+			return
+		}
+		if session.ID != sessionID {
+			b.answerCallback(query.ID, "Счет уже изменился.")
+			return
+		}
+
+		updated, err := b.billService.SplitItemIntoSingles(ctx, sessionID, itemIndex)
+		if err != nil {
+			b.answerCallback(query.ID, err.Error())
+			return
+		}
+
+		b.answerCallback(query.ID, "Позиция разбита.")
+		deleteMsg := tgbotapi.NewDeleteMessage(query.Message.Chat.ID, query.Message.MessageID)
+		if _, err := b.api.Request(deleteMsg); err != nil {
+			log.Printf("delete bill split choice failed: chat_id=%d message_id=%d err=%v", query.Message.Chat.ID, query.Message.MessageID, err)
+		}
+		if updated.MenuMessageID != 0 {
+			b.editBillMessage(query.Message.Chat.ID, updated.MenuMessageID, updated)
+		}
 		return
 	}
 
@@ -883,11 +940,23 @@ func (b *Bot) handleBillPhoto(ctx context.Context, message *tgbotapi.Message) {
 	}
 
 	photo := message.Photo[len(message.Photo)-1]
+	log.Printf(
+		"bill photo received: chat_id=%d message_id=%d file_id=%s file_unique_id=%s width=%d height=%d file_size=%d caption=%q",
+		message.Chat.ID,
+		message.MessageID,
+		photo.FileID,
+		photo.FileUniqueID,
+		photo.Width,
+		photo.Height,
+		photo.FileSize,
+		message.Caption,
+	)
 	url, err := b.api.GetFileDirectURL(photo.FileID)
 	if err != nil {
 		b.editBillPlaceholderError(message.Chat.ID, placeholderMsg.MessageID, fmt.Sprintf("Не удалось получить фото чека: %v", err))
 		return
 	}
+	log.Printf("bill photo url resolved: chat_id=%d message_id=%d url=%s", message.Chat.ID, message.MessageID, url)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -900,15 +969,39 @@ func (b *Bot) handleBillPhoto(ctx context.Context, message *tgbotapi.Message) {
 		return
 	}
 	defer resp.Body.Close()
+	log.Printf(
+		"bill photo downloaded: chat_id=%d message_id=%d status=%d content_type=%q content_length=%d",
+		message.Chat.ID,
+		message.MessageID,
+		resp.StatusCode,
+		resp.Header.Get("Content-Type"),
+		resp.ContentLength,
+	)
 	imageBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		b.editBillPlaceholderError(message.Chat.ID, placeholderMsg.MessageID, fmt.Sprintf("Не удалось прочитать фото чека: %v", err))
 		return
 	}
+	log.Printf("bill photo bytes read: chat_id=%d message_id=%d bytes=%d", message.Chat.ID, message.MessageID, len(imageBytes))
 
 	userName := displayUserName(message.From)
 	payerUserID, payerName := resolveBillPayer(message.From, parseBillCaptionArgs(message.Caption))
-	session, err := b.billService.CreateFromReceipt(ctx, message.Chat.ID, message.Chat.Title, message.From.ID, userName, payerUserID, payerName, photo.FileID, message.MessageID, imageBytes, "image/jpeg")
+	session, err := b.billService.CreateFromReceipt(
+		ctx,
+		message.Chat.ID,
+		message.Chat.Title,
+		message.From.ID,
+		userName,
+		payerUserID,
+		payerName,
+		photo.FileID,
+		message.MessageID,
+		imageBytes,
+		"image/jpeg",
+		func() {
+			b.editBillPlaceholderProgress(message.Chat.ID, placeholderMsg.MessageID, "Первая попытка распознавания не удалась, делаю вторую...")
+		},
+	)
 	if err != nil {
 		if b.tryPromptClosePreviousBill(ctx, message.Chat.ID, placeholderMsg.MessageID, err) {
 			return
@@ -1065,6 +1158,13 @@ func (b *Bot) editBillPlaceholderError(chatID int64, messageID int, text string)
 	}
 }
 
+func (b *Bot) editBillPlaceholderProgress(chatID int64, messageID int, text string) {
+	edit := tgbotapi.NewEditMessageText(chatID, messageID, text)
+	if _, err := b.api.Send(edit); err != nil {
+		log.Printf("edit bill placeholder progress failed: chat_id=%d message_id=%d err=%v", chatID, messageID, err)
+	}
+}
+
 func (b *Bot) tryPromptClosePreviousBill(ctx context.Context, chatID int64, messageID int, err error) bool {
 	if err == nil || !strings.Contains(err.Error(), "уже есть активный счет") {
 		return false
@@ -1114,6 +1214,16 @@ func (b *Bot) sendBillCancelConfirmation(chatID int64, replyTo int, sessionID st
 	)
 	if _, err := b.api.Send(msg); err != nil {
 		log.Printf("send bill cancel confirmation failed: chat_id=%d reply_to=%d err=%v", chatID, replyTo, err)
+	}
+}
+
+func (b *Bot) sendBillSplitChoice(chatID int64, replyTo int, sessionID string, items []domain.BillItem) {
+	text, markup := renderBillSplitChoice(sessionID, items)
+	msg := tgbotapi.NewMessage(chatID, text)
+	msg.ReplyToMessageID = replyTo
+	msg.ReplyMarkup = markup
+	if _, err := b.api.Send(msg); err != nil {
+		log.Printf("send bill split choice failed: chat_id=%d reply_to=%d session_id=%s err=%v", chatID, replyTo, sessionID, err)
 	}
 }
 
@@ -1510,6 +1620,36 @@ func parseBillSendMyCallback(value string) (string, bool) {
 		return "", false
 	}
 	return strings.TrimPrefix(value, billSendMyCallbackPrefix), true
+}
+
+func buildBillSplitMenuCallback(sessionID string) string {
+	return billSplitMenuPrefix + sessionID
+}
+
+func parseBillSplitMenuCallback(value string) (string, bool) {
+	if !strings.HasPrefix(value, billSplitMenuPrefix) {
+		return "", false
+	}
+	return strings.TrimPrefix(value, billSplitMenuPrefix), true
+}
+
+func buildBillSplitItemCallback(sessionID string, itemIndex int) string {
+	return billSplitItemPrefix + sessionID + ":" + strconv.Itoa(itemIndex)
+}
+
+func parseBillSplitItemCallback(value string) (string, int, bool) {
+	if !strings.HasPrefix(value, billSplitItemPrefix) {
+		return "", 0, false
+	}
+	parts := strings.SplitN(strings.TrimPrefix(value, billSplitItemPrefix), ":", 2)
+	if len(parts) != 2 {
+		return "", 0, false
+	}
+	itemIndex, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return "", 0, false
+	}
+	return parts[0], itemIndex, true
 }
 
 func billReplyMarkup(session domain.BillSession) tgbotapi.InlineKeyboardMarkup {

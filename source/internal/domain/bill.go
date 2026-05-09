@@ -29,6 +29,7 @@ type BillSession struct {
 	SourcePhotoMessageID int               `bson:"source_photo_message_id"`
 	MenuMessageID        int               `bson:"menu_message_id"`
 	MerchantName         string            `bson:"merchant_name"`
+	RecognitionAttempts  int               `bson:"recognition_attempts"`
 	Items                []BillItem        `bson:"items"`
 	Assignments          []BillAssignment  `bson:"assignments"`
 	ServiceAmount        decimal.Decimal   `bson:"service_amount"`
@@ -63,6 +64,7 @@ type BillParticipantSummary struct {
 
 type ParsedReceipt struct {
 	MerchantName  string
+	Attempts      int
 	Items         []ParsedReceiptItem
 	ServiceAmount decimal.Decimal
 	TotalAmount   decimal.Decimal

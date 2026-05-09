@@ -28,7 +28,7 @@ func Load() (Config, error) {
 		MongoURI:           strings.TrimSpace(os.Getenv("MONGODB_URI")),
 		MongoDatabase:      strings.TrimSpace(getEnv("MONGODB_DB", "poker_bot")),
 		OpenAIAPIKey:       strings.TrimSpace(getEnv("OPENAI_API_KEY", getEnv("OPEN_API_KEY", ""))),
-		OpenAIReceiptModel: strings.TrimSpace(getEnv("OPENAI_RECEIPT_MODEL", "gpt-4.1-mini")),
+		OpenAIReceiptModel: strings.TrimSpace(getEnv("OPENAI_RECEIPT_MODEL", "gpt-5.4")),
 	}
 
 	price, err := decimal.NewFromString(strings.TrimSpace(getEnv("DEFAULT_BUYIN_PRICE", "2000")))

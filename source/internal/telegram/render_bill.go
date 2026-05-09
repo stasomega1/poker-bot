@@ -9,8 +9,11 @@ import (
 
 	"poker-bot/internal/domain"
 
+	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/shopspring/decimal"
 )
+
+var almatyLocation = time.FixedZone("GMT+5", 5*60*60)
 
 func renderBillSession(session domain.BillSession) string {
 	lines := make([]string, 0, len(session.Items)*3+8)
@@ -33,6 +36,10 @@ func renderBillSession(session domain.BillSession) string {
 		"",
 		"Позиции:",
 	)
+
+	if session.RecognitionAttempts > 0 {
+		lines = append(lines, fmt.Sprintf("Распознано с %d попытки", session.RecognitionAttempts), "")
+	}
 
 	for _, item := range session.Items {
 		lines = append(lines, fmt.Sprintf("%d. %s - %d шт", item.Index, html.EscapeString(item.Name), item.Quantity))
@@ -168,7 +175,7 @@ func formatBillDate(value time.Time) string {
 	if value.IsZero() {
 		return "-"
 	}
-	return value.Local().Format("02.01.2006 15:04")
+	return value.In(almatyLocation).Format("02.01.2006 15:04")
 }
 
 func billAssignmentLines(session domain.BillSession, item domain.BillItem) []string {
@@ -253,6 +260,12 @@ func billKeyboard(session domain.BillSession) [][]ButtonSpec {
 	})
 	rows = append(rows, []ButtonSpec{
 		{
+			Text: "Разбить позицию по одной",
+			Data: buildBillSplitMenuCallback(session.ID),
+		},
+	})
+	rows = append(rows, []ButtonSpec{
+		{
 			Text: "Закрыть счет",
 			Data: buildBillFinishCallback(session.ID),
 		},
@@ -284,4 +297,18 @@ func shortenBillItemName(value string, limit int) string {
 		return string(runes[:limit])
 	}
 	return strings.TrimSpace(string(runes[:limit-1])) + "."
+}
+
+func renderBillSplitChoice(sessionID string, items []domain.BillItem) (string, tgbotapi.InlineKeyboardMarkup) {
+	rows := make([][]tgbotapi.InlineKeyboardButton, 0, len(items)+1)
+	for _, item := range items {
+		label := fmt.Sprintf("#%d %s - %d шт", item.Index, shortenBillItemName(item.Name, 20), item.Quantity)
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData(label, buildBillSplitItemCallback(sessionID, item.Index)),
+		))
+	}
+	rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+		tgbotapi.NewInlineKeyboardButtonData("Нет", billCloseNoopPrefix),
+	))
+	return "Выберите позицию, которую нужно разбить по одной:", tgbotapi.NewInlineKeyboardMarkup(rows...)
 }

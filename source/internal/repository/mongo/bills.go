@@ -134,6 +134,7 @@ type billSessionDocument struct {
 	SourcePhotoMessageID int                      `bson:"source_photo_message_id"`
 	MenuMessageID        int                      `bson:"menu_message_id"`
 	MerchantName         string                   `bson:"merchant_name"`
+	RecognitionAttempts  int                      `bson:"recognition_attempts"`
 	Items                []billItemDocument       `bson:"items"`
 	Assignments          []billAssignmentDocument `bson:"assignments"`
 	ServiceAmount        string                   `bson:"service_amount"`
@@ -206,6 +207,7 @@ func billSessionDocumentFromDomain(session domain.BillSession) (billSessionDocum
 		SourcePhotoMessageID: session.SourcePhotoMessageID,
 		MenuMessageID:        session.MenuMessageID,
 		MerchantName:         session.MerchantName,
+		RecognitionAttempts:  session.RecognitionAttempts,
 		Items:                items,
 		Assignments:          assignments,
 		ServiceAmount:        session.ServiceAmount.String(),
@@ -274,6 +276,7 @@ func (d billSessionDocument) toDomain() (domain.BillSession, error) {
 		SourcePhotoMessageID: d.SourcePhotoMessageID,
 		MenuMessageID:        d.MenuMessageID,
 		MerchantName:         d.MerchantName,
+		RecognitionAttempts:  d.RecognitionAttempts,
 		Items:                items,
 		Assignments:          assignments,
 		ServiceAmount:        serviceAmount,
