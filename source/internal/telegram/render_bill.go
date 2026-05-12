@@ -33,6 +33,7 @@ func renderBillSession(session domain.BillSession) string {
 		fmt.Sprintf("Итого: %s тг", formatDecimal(session.TotalAmount)),
 		fmt.Sprintf("Сервис: %s тг", formatDecimal(session.ServiceAmount)),
 		fmt.Sprintf("Распределено: %d / %d позиций", countAssignedUnits(session), countTotalUnits(session)),
+		fmt.Sprintf("Если нажать на кпоку позиции между + и - можно увидеть полное название, что бы не ходить вверх"),
 		"",
 		"Позиции:",
 	)
@@ -216,6 +217,17 @@ func billAssignmentLines(session domain.BillSession, item domain.BillItem) []str
 	return lines
 }
 
+func renderBillItemDetails(session domain.BillSession, item domain.BillItem) string {
+	lines := []string{
+		fmt.Sprintf("%s - %d шт", item.Name, item.Quantity),
+		fmt.Sprintf("Цена: %s | Разобрано: %d/%d", formatDecimal(item.UnitPrice), item.Assigned, item.Quantity),
+	}
+	for _, assignmentLine := range billAssignmentLines(session, item) {
+		lines = append(lines, assignmentLine)
+	}
+	return strings.Join(lines, "\n")
+}
+
 func billAssignmentAmount(item domain.BillItem, quantity int) string {
 	if quantity <= 0 {
 		return formatDecimal(decimal.Zero)
@@ -244,7 +256,7 @@ func billKeyboard(session domain.BillSession) [][]ButtonSpec {
 			},
 			{
 				Text: billItemButtonLabel(item),
-				Data: billHintPrefix,
+				Data: buildBillItemHintCallback(session.ID, item.Index),
 			},
 			{
 				Text: "+",

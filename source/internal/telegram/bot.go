@@ -66,6 +66,7 @@ const (
 	billSendMyCallbackPrefix = "bill_send_my:"
 	billSplitMenuPrefix      = "bill_split_menu:"
 	billSplitItemPrefix      = "bill_split_item:"
+	billItemHintPrefix       = "bill_item_hint:"
 	billCloseNoopPrefix      = "bill_close_noop"
 	billHintPrefix           = "bill_hint"
 )
@@ -399,7 +400,7 @@ func (b *Bot) handleCallbackQuery(ctx context.Context, query *tgbotapi.CallbackQ
 
 		dm := tgbotapi.NewMessage(query.From.ID, text)
 		if _, err := b.api.Send(dm); err != nil {
-			b.answerCallback(query.ID, "Не удалось отправить в личку. Сначала откройте бота командой /start.")
+			b.answerCallbackAlert(query.ID, "Чтобы получить свой счет, сначала откройте личку с ботом и отправьте /start (ограничение телеграма, боты не могут писать первыми)")
 			return
 		}
 
@@ -459,6 +460,27 @@ func (b *Bot) handleCallbackQuery(ctx context.Context, query *tgbotapi.CallbackQ
 		if updated.MenuMessageID != 0 {
 			b.editBillMessage(query.Message.Chat.ID, updated.MenuMessageID, updated)
 		}
+		return
+	}
+
+	if sessionID, itemIndex, ok := parseBillItemHintCallback(query.Data); ok {
+		session, err := b.billService.GetActive(ctx, query.Message.Chat.ID)
+		if err != nil {
+			b.answerCallback(query.ID, "Не удалось получить счет.")
+			return
+		}
+		if session.ID != sessionID {
+			b.answerCallback(query.ID, "Счет уже изменился.")
+			return
+		}
+
+		for _, item := range session.Items {
+			if item.Index == itemIndex {
+				b.answerCallbackAlert(query.ID, renderBillItemDetails(session, item))
+				return
+			}
+		}
+		b.answerCallback(query.ID, "Позиция не найдена.")
 		return
 	}
 
@@ -1424,6 +1446,14 @@ func (b *Bot) answerCallback(callbackID, text string) {
 	}
 }
 
+func (b *Bot) answerCallbackAlert(callbackID, text string) {
+	cfg := tgbotapi.NewCallback(callbackID, text)
+	cfg.ShowAlert = true
+	if _, err := b.api.Request(cfg); err != nil {
+		log.Printf("answer callback alert failed: callback_id=%s text=%q err=%v", callbackID, text, err)
+	}
+}
+
 func isAllowedMemberStatus(status string) bool {
 	switch status {
 	case "creator", "administrator", "member", "restricted":
@@ -1642,6 +1672,25 @@ func parseBillSplitItemCallback(value string) (string, int, bool) {
 		return "", 0, false
 	}
 	parts := strings.SplitN(strings.TrimPrefix(value, billSplitItemPrefix), ":", 2)
+	if len(parts) != 2 {
+		return "", 0, false
+	}
+	itemIndex, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return "", 0, false
+	}
+	return parts[0], itemIndex, true
+}
+
+func buildBillItemHintCallback(sessionID string, itemIndex int) string {
+	return billItemHintPrefix + sessionID + ":" + strconv.Itoa(itemIndex)
+}
+
+func parseBillItemHintCallback(value string) (string, int, bool) {
+	if !strings.HasPrefix(value, billItemHintPrefix) {
+		return "", 0, false
+	}
+	parts := strings.SplitN(strings.TrimPrefix(value, billItemHintPrefix), ":", 2)
 	if len(parts) != 2 {
 		return "", 0, false
 	}
