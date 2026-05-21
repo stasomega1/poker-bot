@@ -102,7 +102,11 @@ func (b *Bot) Run(ctx context.Context) error {
 
 	updateConfig := tgbotapi.NewUpdate(0)
 	updateConfig.Timeout = 30
-	updateConfig.AllowedUpdates = []string{"message", "callback_query"}
+	updateConfig.AllowedUpdates = []string{
+		tgbotapi.UpdateTypeMessage,
+		tgbotapi.UpdateTypeEditedMessage,
+		tgbotapi.UpdateTypeCallbackQuery,
+	}
 
 	log.Printf("telegram bot started")
 	updates := b.api.GetUpdatesChan(updateConfig)
@@ -115,10 +119,12 @@ func (b *Bot) Run(ctx context.Context) error {
 			if !ok {
 				return nil
 			}
-			log.Printf("update received: update_id=%d has_message=%t has_callback=%t", update.UpdateID, update.Message != nil, update.CallbackQuery != nil)
+			log.Printf("update received: update_id=%d has_message=%t has_edited_message=%t has_callback=%t", update.UpdateID, update.Message != nil, update.EditedMessage != nil, update.CallbackQuery != nil)
 			switch {
 			case update.Message != nil:
 				b.handleMessage(ctx, update.Message)
+			case update.EditedMessage != nil:
+				b.handleEditedMessage(ctx, update.EditedMessage)
 			case update.CallbackQuery != nil:
 				b.handleCallbackQuery(ctx, update.CallbackQuery)
 			}
@@ -214,6 +220,32 @@ func (b *Bot) handleMessage(ctx context.Context, message *tgbotapi.Message) {
 	default:
 		log.Printf("unknown command: chat_id=%d message_id=%d command=%q", message.Chat.ID, message.MessageID, message.Command())
 	}
+}
+
+func (b *Bot) handleEditedMessage(ctx context.Context, message *tgbotapi.Message) {
+	if message.Chat == nil || message.Chat.IsPrivate() {
+		return
+	}
+
+	replyToID := 0
+	if message.ReplyToMessage != nil {
+		replyToID = message.ReplyToMessage.MessageID
+	}
+
+	log.Printf("edited message: chat_id=%d message_id=%d reply_to=%d text=%q",
+		message.Chat.ID, message.MessageID, replyToID, message.Text)
+
+	allowed, err := b.settingsService.IsAllowed(ctx, message.Chat.ID)
+	if err != nil {
+		log.Printf("allow check failed for edited message: chat_id=%d err=%v", message.Chat.ID, err)
+		return
+	}
+	if !allowed {
+		log.Printf("edited message skipped: chat_id=%d is not registered", message.Chat.ID)
+		return
+	}
+
+	b.messageStore.Save(message)
 }
 
 func (b *Bot) handlePrivateMessage(ctx context.Context, message *tgbotapi.Message) {
@@ -1920,20 +1952,27 @@ func (s *messageStore) Save(message *tgbotapi.Message) {
 		s.chats[message.Chat.ID] = buffer
 	}
 
-	replyToID := 0
+	existing, exists := buffer.items[message.MessageID]
+
+	replyToID := existing.ReplyToMessageID
 	if message.ReplyToMessage != nil {
 		replyToID = message.ReplyToMessage.MessageID
 	}
 
-	if _, exists := buffer.items[message.MessageID]; !exists {
+	if !exists {
 		buffer.order = append(buffer.order, message.MessageID)
+	}
+
+	date := existing.Date
+	if message.Date > 0 {
+		date = time.Unix(int64(message.Date), 0).UTC()
 	}
 
 	buffer.items[message.MessageID] = storedMessage{
 		MessageID:        message.MessageID,
 		Text:             message.Text,
 		ReplyToMessageID: replyToID,
-		Date:             time.Unix(int64(message.Date), 0).UTC(),
+		Date:             date,
 	}
 
 	for len(buffer.order) > buffer.limit {
