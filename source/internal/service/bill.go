@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -208,12 +209,10 @@ func (s *BillService) SplitItemIntoSingles(ctx context.Context, sessionID string
 	if target.Quantity <= 1 {
 		return domain.BillSession{}, fmt.Errorf("позицию нельзя разбить")
 	}
-	if target.Assigned != 0 {
-		return domain.BillSession{}, fmt.Errorf("позицию можно разбить только до распределения")
-	}
 
 	newItems := make([]domain.BillItem, 0, len(session.Items)-1+target.Quantity)
 	oldIndexToNew := make(map[int]int, len(session.Items))
+	splitItemIndexes := make([]int, 0, target.Quantity)
 
 	for i, item := range session.Items {
 		if i != targetPos {
@@ -231,6 +230,7 @@ func (s *BillService) SplitItemIntoSingles(ctx context.Context, sessionID string
 				Assigned:  0,
 				Remaining: 1,
 			})
+			splitItemIndexes = append(splitItemIndexes, len(newItems)-1)
 		}
 	}
 
@@ -242,15 +242,47 @@ func (s *BillService) SplitItemIntoSingles(ctx context.Context, sessionID string
 		}
 	}
 
-	for i := range session.Assignments {
-		newIndex, ok := oldIndexToNew[session.Assignments[i].ItemIndex]
+	for i, itemPosition := range splitItemIndexes {
+		splitItemIndexes[i] = newItems[itemPosition].Index
+	}
+
+	assignments := make([]domain.BillAssignment, 0, len(session.Assignments)+target.Assigned)
+	splitAssignmentByUserAndItem := make(map[string]int)
+	splitUnitPosition := 0
+	for _, assignment := range session.Assignments {
+		if assignment.ItemIndex == target.Index {
+			for i := 0; i < assignment.Quantity; i++ {
+				itemIndex := splitItemIndexes[splitUnitPosition%len(splitItemIndexes)]
+				splitUnitPosition++
+				key := strconv.FormatInt(assignment.UserID, 10) + ":" + strconv.Itoa(itemIndex)
+				existingPos, ok := splitAssignmentByUserAndItem[key]
+				if ok {
+					assignments[existingPos].Quantity++
+				} else {
+					splitAssignmentByUserAndItem[key] = len(assignments)
+					assignments = append(assignments, domain.BillAssignment{
+						UserID:    assignment.UserID,
+						UserName:  assignment.UserName,
+						ItemIndex: itemIndex,
+						Quantity:  1,
+					})
+				}
+				newItems[itemIndex-1].Assigned++
+				newItems[itemIndex-1].Remaining = max(newItems[itemIndex-1].Quantity-newItems[itemIndex-1].Assigned, 0)
+			}
+			continue
+		}
+
+		newIndex, ok := oldIndexToNew[assignment.ItemIndex]
 		if !ok {
 			return domain.BillSession{}, fmt.Errorf("не удалось обновить назначения после разбивки")
 		}
-		session.Assignments[i].ItemIndex = newIndex
+		assignment.ItemIndex = newIndex
+		assignments = append(assignments, assignment)
 	}
 
 	session.Items = newItems
+	session.Assignments = assignments
 	if err := s.billRepo.Update(ctx, session); err != nil {
 		return domain.BillSession{}, err
 	}

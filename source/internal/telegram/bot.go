@@ -76,6 +76,13 @@ type accessibleChat struct {
 	Title  string
 }
 
+type billPhotoInput struct {
+	Photo           tgbotapi.PhotoSize
+	PayerArgs       string
+	SourceMessageID int
+	SourceCaption   string
+}
+
 func NewBot(cfg config.Config, gameService *service.GameService, settingsService *service.ChatSettingsService, statsService *service.StatsService, archiveService *service.ArchiveService, billService *service.BillService) (*Bot, error) {
 	api, err := tgbotapi.NewBotAPI(cfg.BotToken)
 	if err != nil {
@@ -215,6 +222,8 @@ func (b *Bot) handleMessage(ctx context.Context, message *tgbotapi.Message) {
 		b.handleStatsCommand(ctx, message.Chat.ID, message.Chat.Title, message.Chat.ID, message.MessageID, command, args)
 	case "players":
 		b.handleGroupPlayers(ctx, message.Chat.ID, message.Chat.Title, message.Chat.ID, message.MessageID)
+	case "bill":
+		b.handleBillPhoto(ctx, message)
 	case "debug":
 		b.handleBillDebug(ctx, message)
 	default:
@@ -268,6 +277,8 @@ func (b *Bot) handlePrivateMessage(ctx context.Context, message *tgbotapi.Messag
 		b.handlePrivateAction(ctx, message, actionHistory)
 	case "players":
 		b.handlePrivateAction(ctx, message, actionPlayers)
+	case "bill":
+		b.reply(message.Chat.ID, message.MessageID, billUsageText())
 	case "archive":
 		b.handlePrivateArchive(ctx, message)
 	case "archive_history", "archive_stats", "archive_players", "archive_game", "archive_player", "archive_top":
@@ -453,7 +464,7 @@ func (b *Bot) handleCallbackQuery(ctx context.Context, query *tgbotapi.CallbackQ
 
 		splittable := make([]domain.BillItem, 0)
 		for _, item := range session.Items {
-			if item.Quantity > 1 && item.Assigned == 0 {
+			if item.Quantity > 1 {
 				splittable = append(splittable, item)
 			}
 		}
@@ -980,8 +991,9 @@ func (b *Bot) handleBillPhoto(ctx context.Context, message *tgbotapi.Message) {
 		b.reply(message.Chat.ID, message.MessageID, "Необходимо зарегистрировать группу с помощью команды /reg")
 		return
 	}
-	if len(message.Photo) == 0 {
-		b.reply(message.Chat.ID, message.MessageID, "Нужно отправить фото чека с подписью /bill")
+	input, ok := billPhotoFromMessage(message)
+	if !ok {
+		b.reply(message.Chat.ID, message.MessageID, billUsageText())
 		return
 	}
 
@@ -993,17 +1005,18 @@ func (b *Bot) handleBillPhoto(ctx context.Context, message *tgbotapi.Message) {
 		return
 	}
 
-	photo := message.Photo[len(message.Photo)-1]
+	photo := input.Photo
 	log.Printf(
-		"bill photo received: chat_id=%d message_id=%d file_id=%s file_unique_id=%s width=%d height=%d file_size=%d caption=%q",
+		"bill photo received: chat_id=%d command_message_id=%d source_message_id=%d file_id=%s file_unique_id=%s width=%d height=%d file_size=%d caption=%q",
 		message.Chat.ID,
 		message.MessageID,
+		input.SourceMessageID,
 		photo.FileID,
 		photo.FileUniqueID,
 		photo.Width,
 		photo.Height,
 		photo.FileSize,
-		message.Caption,
+		input.SourceCaption,
 	)
 	url, err := b.api.GetFileDirectURL(photo.FileID)
 	if err != nil {
@@ -1039,7 +1052,7 @@ func (b *Bot) handleBillPhoto(ctx context.Context, message *tgbotapi.Message) {
 	log.Printf("bill photo bytes read: chat_id=%d message_id=%d bytes=%d", message.Chat.ID, message.MessageID, len(imageBytes))
 
 	userName := displayUserName(message.From)
-	payerUserID, payerName := resolveBillPayer(message.From, parseBillCaptionArgs(message.Caption))
+	payerUserID, payerName := resolveBillPayer(message.From, input.PayerArgs)
 	session, err := b.billService.CreateFromReceipt(
 		ctx,
 		message.Chat.ID,
@@ -1752,12 +1765,42 @@ func isBillPhotoCommand(message *tgbotapi.Message) bool {
 	return strings.HasPrefix(strings.TrimSpace(message.Caption), "/bill")
 }
 
+func billPhotoFromMessage(message *tgbotapi.Message) (billPhotoInput, bool) {
+	if message == nil {
+		return billPhotoInput{}, false
+	}
+
+	if len(message.Photo) > 0 && strings.HasPrefix(strings.TrimSpace(message.Caption), "/bill") {
+		return billPhotoInput{
+			Photo:           message.Photo[len(message.Photo)-1],
+			PayerArgs:       parseBillCaptionArgs(message.Caption),
+			SourceMessageID: message.MessageID,
+			SourceCaption:   message.Caption,
+		}, true
+	}
+
+	if !message.IsCommand() || message.Command() != "bill" || message.ReplyToMessage == nil || len(message.ReplyToMessage.Photo) == 0 {
+		return billPhotoInput{}, false
+	}
+
+	return billPhotoInput{
+		Photo:           message.ReplyToMessage.Photo[len(message.ReplyToMessage.Photo)-1],
+		PayerArgs:       strings.TrimSpace(message.CommandArguments()),
+		SourceMessageID: message.ReplyToMessage.MessageID,
+		SourceCaption:   message.ReplyToMessage.Caption,
+	}, true
+}
+
 func parseBillCaptionArgs(caption string) string {
 	caption = strings.TrimSpace(caption)
 	if !strings.HasPrefix(caption, "/bill") {
 		return ""
 	}
 	return strings.TrimSpace(strings.TrimPrefix(caption, "/bill"))
+}
+
+func billUsageText() string {
+	return "Нужно отправить фото чека с подписью /bill или ответить /bill на фото чека. Можно указать плательщика: /bill @payer"
 }
 
 func resolveBillPayer(user *tgbotapi.User, raw string) (int64, string) {
