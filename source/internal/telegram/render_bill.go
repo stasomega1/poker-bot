@@ -32,7 +32,7 @@ func renderBillSession(session domain.BillSession) string {
 		fmt.Sprintf("Плательщик: %s", html.EscapeString(session.PayerName)),
 		fmt.Sprintf("Итого: %s тг", formatDecimal(session.TotalAmount)),
 		fmt.Sprintf("Сервис: %s тг", formatDecimal(session.ServiceAmount)),
-		fmt.Sprintf("Распределено: %d / %d позиций", countAssignedUnits(session), countTotalUnits(session)),
+		fmt.Sprintf("Распределено: %d / %d долей", countAssignedUnits(session), countTotalUnits(session)),
 		fmt.Sprintf("Если нажать на кпоку позиции между + и - можно увидеть полное название, что бы не ходить вверх"),
 		"",
 		"Позиции:",
@@ -43,8 +43,8 @@ func renderBillSession(session domain.BillSession) string {
 	}
 
 	for _, item := range session.Items {
-		lines = append(lines, fmt.Sprintf("%d. %s - %d шт", item.Index, html.EscapeString(item.Name), item.Quantity))
-		lines = append(lines, fmt.Sprintf("Цена: %s | Разобрано: %d/%d", formatDecimal(item.UnitPrice), item.Assigned, item.Quantity))
+		lines = append(lines, fmt.Sprintf("%d. %s - %s", item.Index, html.EscapeString(item.Name), billItemQuantityLabel(item)))
+		lines = append(lines, fmt.Sprintf("Цена: %s | Разобрано: %d/%d", formatDecimal(item.UnitPrice), item.Assigned, item.EffectiveQuantity()))
 		for _, assignmentLine := range billAssignmentLines(session, item) {
 			lines = append(lines, assignmentLine)
 		}
@@ -72,7 +72,7 @@ func renderBillSummary(session domain.BillSession, summary []domain.BillParticip
 		lines = append(lines, "")
 	}
 
-	lines = append(lines, fmt.Sprintf("Осталось распределить позиций: %d", countRemainingUnits(session)))
+	lines = append(lines, fmt.Sprintf("Осталось распределить долей: %d", countRemainingUnits(session)))
 	return strings.TrimSpace(strings.Join(lines, "\n"))
 }
 
@@ -108,7 +108,7 @@ func renderBillMyDetailed(session domain.BillSession, row domain.BillParticipant
 			continue
 		}
 		selected = true
-		lines = append(lines, fmt.Sprintf("%s - %d/%d", item.Name, userQty, item.Quantity))
+		lines = append(lines, fmt.Sprintf("%s - %d/%d", item.Name, userQty, item.EffectiveQuantity()))
 		lines = append(lines, fmt.Sprintf("%s тг", billAssignmentAmount(item, userQty)))
 	}
 	if !selected {
@@ -125,13 +125,15 @@ func renderBillMyDetailed(session domain.BillSession, row domain.BillParticipant
 	return strings.TrimSpace(strings.Join(lines, "\n"))
 }
 
-func renderBillFinish(session domain.BillSession, summary []domain.BillParticipantSummary) string {
+func renderBillFinish(session domain.BillSession, summary []domain.BillParticipantSummary, actorName string) string {
 	lines := []string{
 		fmt.Sprintf("Счет закрыт: %s", fallbackBillMerchant(session.MerchantName)),
 		fmt.Sprintf("Плательщик: %s", session.PayerName),
-		"",
-		"К переводу:",
 	}
+	if strings.TrimSpace(actorName) != "" {
+		lines = append(lines, fmt.Sprintf("Закрыл: %s", actorName))
+	}
+	lines = append(lines, "", "К переводу:")
 
 	for _, row := range summary {
 		lines = append(lines, fmt.Sprintf("%s -> %s: %s тг", row.UserName, session.PayerName, formatDecimal(row.GrandTotal)))
@@ -140,10 +142,17 @@ func renderBillFinish(session domain.BillSession, summary []domain.BillParticipa
 	return strings.Join(lines, "\n")
 }
 
+func renderBillCancelled(actorName string) string {
+	if strings.TrimSpace(actorName) == "" {
+		return "Счет отменен."
+	}
+	return fmt.Sprintf("Счет отменен: %s", actorName)
+}
+
 func countAssignedUnits(session domain.BillSession) int {
 	total := 0
 	for _, item := range session.Items {
-		total += item.Quantity - item.Remaining
+		total += item.Assigned
 	}
 	return total
 }
@@ -151,7 +160,7 @@ func countAssignedUnits(session domain.BillSession) int {
 func countTotalUnits(session domain.BillSession) int {
 	total := 0
 	for _, item := range session.Items {
-		total += item.Quantity
+		total += item.ProgressCapacity()
 	}
 	return total
 }
@@ -219,8 +228,8 @@ func billAssignmentLines(session domain.BillSession, item domain.BillItem) []str
 
 func renderBillItemDetails(session domain.BillSession, item domain.BillItem) string {
 	lines := []string{
-		fmt.Sprintf("%s - %d шт", item.Name, item.Quantity),
-		fmt.Sprintf("Цена: %s | Разобрано: %d/%d", formatDecimal(item.UnitPrice), item.Assigned, item.Quantity),
+		fmt.Sprintf("%s - %s", item.Name, billItemQuantityLabel(item)),
+		fmt.Sprintf("Цена: %s | Разобрано: %d/%d", formatDecimal(item.UnitPrice), item.Assigned, item.EffectiveQuantity()),
 	}
 	for _, assignmentLine := range billAssignmentLines(session, item) {
 		lines = append(lines, assignmentLine)
@@ -231,6 +240,12 @@ func renderBillItemDetails(session domain.BillSession, item domain.BillItem) str
 func billAssignmentAmount(item domain.BillItem, quantity int) string {
 	if quantity <= 0 {
 		return formatDecimal(decimal.Zero)
+	}
+
+	if item.IsSharedSingleton() {
+		divisor := max(item.EffectiveQuantity(), item.Assigned)
+		share := item.LineTotal.Div(decimal.NewFromInt(int64(divisor)))
+		return formatDecimal(share.Mul(decimal.NewFromInt(int64(quantity))))
 	}
 
 	if item.Assigned > item.Quantity {
@@ -295,7 +310,15 @@ type ButtonSpec struct {
 }
 
 func billItemButtonLabel(item domain.BillItem) string {
-	return fmt.Sprintf("%s %d/%d", shortenBillItemName(item.Name, 10), item.Assigned, item.Quantity)
+	return fmt.Sprintf("%s %d/%d", shortenBillItemName(item.Name, 10), item.Assigned, item.EffectiveQuantity())
+}
+
+func billItemQuantityLabel(item domain.BillItem) string {
+	label := fmt.Sprintf("%d шт", item.Quantity)
+	if item.IsSharedSingleton() {
+		return fmt.Sprintf("%s (разбито на %d человек)", label, item.EffectiveQuantity())
+	}
+	return label
 }
 
 func shortenBillItemName(value string, limit int) string {

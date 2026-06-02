@@ -6,7 +6,9 @@ Add a Telegram Mini App as a second UI for the existing poker bot.
 
 The Mini App should reuse the current Go services and MongoDB repositories. The current Telegram bot remains responsible for group commands, receipt creation, and posting final messages back to the chat.
 
-The first Mini App version should focus on bill splitting because this is the flow that suffers most from Telegram inline button limits.
+The first Mini App version focuses on bill splitting because this is the flow that suffers most from Telegram inline button limits.
+
+This file is no longer only a proposal. It now serves as a living implementation note for the current Mini App behavior.
 
 ## Current Bot Features
 
@@ -93,15 +95,12 @@ Relevant bill domain models:
 
 ### Entry Point
 
-The bot should send a Telegram Mini App button in the group when there is an active bill.
+Current implementation:
 
-Possible entry points:
-
-- add an "Open bill" Mini App button to the `/bill` message;
-- add a new `/app` command that opens the active bill;
-- add a bot menu button later.
-
-For the MVP, the preferred entry point is an inline button under the active bill message.
+- the active bill message contains an `Open bill` action;
+- `/app` sends a separate open button for the current active bill;
+- production launch uses a Telegram deep link to the bot Mini App;
+- local development can still open `/app/` directly with dev auth enabled.
 
 ### Bill Screen
 
@@ -117,11 +116,12 @@ The Mini App should show:
 - remaining units count;
 - list of receipt items.
 
-Each item should show:
+Each item now shows:
 
 - item index;
 - name;
 - quantity;
+- expected participant count for single-item shared rows;
 - unit price;
 - line total;
 - assigned quantity;
@@ -134,6 +134,8 @@ The current Telegram user should be able to:
 
 - add one unit of an item to themselves;
 - remove one unit of an item from themselves;
+- change `expectedParticipants` for a single-quantity item;
+- intentionally over-assign by continuing to press `+`;
 - see their current selected items;
 - see their current total;
 - see their service share;
@@ -141,26 +143,21 @@ The current Telegram user should be able to:
 
 ### Organizer Actions
 
-For the MVP, bill creator and payer should be allowed to:
+Current organizer-only actions in the visible Mini App UI:
 
 - split a multi-quantity item into single-unit items;
-- cancel the bill;
 - finish the bill;
 - force finish the bill if unassigned positions remain.
 
-Access rules can be tightened later.
+The backend API also supports bill cancel, but the current frontend does not expose a separate cancel button.
 
 ### Sync
 
-For the MVP, polling is enough.
-
-Recommended behavior:
+Current behavior:
 
 - fetch bill state on app open;
 - refetch after every mutation;
-- poll active bill state every 1-2 seconds while the app is visible.
-
-WebSocket or SSE can be added later if polling becomes painful.
+- poll active bill state every 2 seconds while the app is visible.
 
 ## Out Of Scope For MVP
 
@@ -232,14 +229,6 @@ Response should include:
 - current user's summary;
 - current user's permissions.
 
-### Get Active Bill By Chat
-
-```http
-GET /api/webapp/chats/{chat_id}/bills/active
-```
-
-This is useful for debugging and internal bot flows, but the public Mini App should prefer `session_id`.
-
 ### Adjust Item
 
 ```http
@@ -260,6 +249,26 @@ Allowed `delta` values:
 - `-1`
 
 The backend must use the Telegram user from `initData`, not from the request body.
+
+### Change Expected Participants
+
+```http
+POST /api/webapp/bills/{session_id}/items/{item_index}/expected-participants
+```
+
+Request:
+
+```json
+{
+  "expectedParticipants": 3
+}
+```
+
+Current rules:
+
+- available only for `quantity == 1` rows;
+- any participant of the active bill can change it;
+- later over-assignment is allowed, so `assigned` may exceed `expectedParticipants`.
 
 ### Split Item
 
@@ -304,26 +313,11 @@ After successful cancel:
 
 ### Tech Choice
 
-Recommended stack:
+Current stack:
 
-- Vite
-- React
-- TypeScript
-- Telegram Mini App SDK or direct `window.Telegram.WebApp` usage
-
-The frontend can live under:
-
-```text
-source/webapp
-```
-
-or:
-
-```text
-webapp
-```
-
-Open question: decide whether to keep frontend inside `source` or at repo root.
+- embedded static HTML/CSS/JS inside Go;
+- direct `window.Telegram.WebApp` usage;
+- no separate frontend build step.
 
 ### Screens
 
@@ -350,41 +344,29 @@ Recommended layout:
 
 ### Item Controls
 
-Each item row should have:
+Each item row has:
 
 - minus button;
 - current user's selected quantity;
 - plus button;
+- optional `expectedParticipants` dropdown for `quantity == 1`;
 - expanded details for assignments.
 
-Button rules:
+Current button rules:
 
-- disable minus if the current user has no quantity for the item;
-- disable plus if the item has no remaining quantity unless over-assignment is intentionally supported;
-- show split action only for quantity greater than 1 and organizer users.
-
-Open question: current backend allows assigned quantity to exceed item quantity in some summary logic. Decide whether the Mini App UI should prevent over-assignment.
+- minus is disabled when the current user has no quantity for the item;
+- plus stays enabled while the bill is active, even after the nominal capacity is filled;
+- over-assignment is intentionally supported;
+- split action is shown only for `quantity > 1` and organizer users.
 
 ## Backend Integration Notes
 
-The current `app.New` constructs services and passes them only into the Telegram bot.
+Current backend shape:
 
-To support Mini App API, app initialization should probably change to:
-
-- construct shared services once;
-- construct Telegram bot with shared services;
-- construct HTTP server with the same shared services;
-- run bot polling and HTTP server together.
-
-Possible structure:
-
-```text
-source/internal/httpserver
-source/internal/webapp
-source/webapp
-```
-
-The HTTP server should be optional only if needed, but the Mini App needs a public HTTPS endpoint in production.
+- shared services are constructed once in `app.New`;
+- Telegram bot and HTTP server use the same `BillService`;
+- HTTP server lives under `source/internal/webapp`;
+- frontend static files are embedded into the Go binary.
 
 ## Deployment Notes
 
@@ -398,11 +380,14 @@ Deployment needs:
 - CORS policy if frontend and API are on different origins;
 - environment variable for web app base URL.
 
-Suggested new env vars:
+Current env vars:
 
 - `WEBAPP_BASE_URL`
 - `HTTP_ADDR`
 - `TELEGRAM_INIT_DATA_MAX_AGE`
+- `WEBAPP_DEV_MODE`
+- `WEBAPP_DEV_USER_ID`
+- `WEBAPP_DEV_USERNAME`
 
 ## Security Notes
 
@@ -414,15 +399,14 @@ Suggested new env vars:
 - Keep finish and cancel actions permissioned.
 - Rate-limit mutation endpoints if abuse becomes a problem.
 
-## Open Decisions
+## Current Decisions
 
-- Should MVP use `session_id` or `chat_id` as the main route parameter?
-- Which users can finish or cancel a bill?
-- Should over-assignment be blocked in the Mini App UI?
-- Should the bot message be edited after every Mini App action, or only after finish/cancel?
-- Should polling be 1 second, 2 seconds, or manual refresh for the first version?
-- Should frontend live in `source/webapp` or repo-root `webapp`?
-- Should HTTP API be served by the same Go process as the bot?
+- main route parameter is `session_id`;
+- finish and cancel remain organizer-level actions;
+- over-assignment is allowed both in Telegram and Mini App;
+- bot message is refreshed after Mini App mutations;
+- polling interval is 2 seconds;
+- HTTP API is served by the same Go process as the bot.
 
 ## Suggested Implementation Phases
 

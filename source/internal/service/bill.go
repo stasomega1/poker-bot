@@ -68,13 +68,14 @@ func (s *BillService) createSessionFromParsedReceipt(ctx context.Context, chatID
 	itemsSubtotal := decimal.Zero
 	for i, item := range parsed.Items {
 		items = append(items, domain.BillItem{
-			Index:     i + 1,
-			Name:      strings.TrimSpace(item.Name),
-			Quantity:  item.Quantity,
-			UnitPrice: item.UnitPrice,
-			LineTotal: item.LineTotal,
-			Assigned:  0,
-			Remaining: item.Quantity,
+			Index:                i + 1,
+			Name:                 strings.TrimSpace(item.Name),
+			Quantity:             item.Quantity,
+			UnitPrice:            item.UnitPrice,
+			LineTotal:            item.LineTotal,
+			ExpectedParticipants: 1,
+			Assigned:             0,
+			Remaining:            item.Quantity,
 		})
 		itemsSubtotal = itemsSubtotal.Add(item.LineTotal)
 	}
@@ -103,6 +104,10 @@ func (s *BillService) createSessionFromParsedReceipt(ctx context.Context, chatID
 
 func (s *BillService) GetActive(ctx context.Context, chatID int64) (domain.BillSession, error) {
 	return s.billRepo.FindActiveByChatID(ctx, chatID)
+}
+
+func (s *BillService) GetByID(ctx context.Context, sessionID string) (domain.BillSession, error) {
+	return s.billRepo.FindByID(ctx, sessionID)
 }
 
 func (s *BillService) SetMenuMessageID(ctx context.Context, sessionID string, messageID int) error {
@@ -171,10 +176,54 @@ func (s *BillService) AdjustItem(ctx context.Context, sessionID string, userID i
 	}
 
 	item.Assigned += delta
-	item.Remaining = max(item.Quantity-item.Assigned, 0)
+	item.Remaining = max(item.EffectiveQuantity()-item.Assigned, 0)
 	if item.Assigned < 0 {
 		return domain.BillSession{}, fmt.Errorf("некорректное состояние распределения")
 	}
+
+	if err := s.billRepo.Update(ctx, session); err != nil {
+		return domain.BillSession{}, err
+	}
+	return session, nil
+}
+
+func (s *BillService) SetExpectedParticipants(ctx context.Context, sessionID string, userID int64, itemIndex int, expectedParticipants int) (domain.BillSession, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if expectedParticipants < 1 {
+		return domain.BillSession{}, fmt.Errorf("количество участников должно быть не меньше 1")
+	}
+
+	session, err := s.billRepo.FindByID(ctx, sessionID)
+	if err != nil {
+		return domain.BillSession{}, err
+	}
+	if session.Status != domain.BillSessionActive {
+		return domain.BillSession{}, fmt.Errorf("счет уже закрыт")
+	}
+
+	itemPosition := -1
+	for i := range session.Items {
+		if session.Items[i].Index == itemIndex {
+			itemPosition = i
+			break
+		}
+	}
+	if itemPosition == -1 {
+		return domain.BillSession{}, fmt.Errorf("позиция не найдена")
+	}
+
+	item := &session.Items[itemPosition]
+	if item.Quantity != 1 {
+		return domain.BillSession{}, fmt.Errorf("эту позицию нельзя делить по участникам")
+	}
+	if item.Assigned > expectedParticipants {
+		return domain.BillSession{}, fmt.Errorf("нельзя поставить меньше %d: уже выбрали %d человек", item.Assigned, item.Assigned)
+	}
+
+	item.ExpectedParticipants = expectedParticipants
+	item.Remaining = max(item.EffectiveQuantity()-item.Assigned, 0)
 
 	if err := s.billRepo.Update(ctx, session); err != nil {
 		return domain.BillSession{}, err
@@ -223,12 +272,13 @@ func (s *BillService) SplitItemIntoSingles(ctx context.Context, sessionID string
 		unitLineTotal := target.LineTotal.Div(decimal.NewFromInt(int64(target.Quantity)))
 		for j := 0; j < target.Quantity; j++ {
 			newItems = append(newItems, domain.BillItem{
-				Name:      target.Name,
-				Quantity:  1,
-				UnitPrice: target.UnitPrice,
-				LineTotal: unitLineTotal,
-				Assigned:  0,
-				Remaining: 1,
+				Name:                 target.Name,
+				Quantity:             1,
+				UnitPrice:            target.UnitPrice,
+				LineTotal:            unitLineTotal,
+				ExpectedParticipants: 1,
+				Assigned:             0,
+				Remaining:            1,
 			})
 			splitItemIndexes = append(splitItemIndexes, len(newItems)-1)
 		}
@@ -304,6 +354,24 @@ func (s *BillService) Cancel(ctx context.Context, chatID int64) (domain.BillSess
 	return session, nil
 }
 
+func (s *BillService) CancelBySessionID(ctx context.Context, sessionID string) (domain.BillSession, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	session, err := s.billRepo.FindByID(ctx, sessionID)
+	if err != nil {
+		return domain.BillSession{}, err
+	}
+	if session.Status != domain.BillSessionActive {
+		return domain.BillSession{}, fmt.Errorf("счет уже закрыт")
+	}
+	session.Status = domain.BillSessionCancelled
+	if err := s.billRepo.Update(ctx, session); err != nil {
+		return domain.BillSession{}, err
+	}
+	return session, nil
+}
+
 func (s *BillService) Finish(ctx context.Context, chatID int64, force bool) (domain.BillSession, []domain.BillParticipantSummary, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -328,6 +396,32 @@ func (s *BillService) Finish(ctx context.Context, chatID int64, force bool) (dom
 	return session, summary, nil
 }
 
+func (s *BillService) FinishBySessionID(ctx context.Context, sessionID string, force bool) (domain.BillSession, []domain.BillParticipantSummary, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	session, err := s.billRepo.FindByID(ctx, sessionID)
+	if err != nil {
+		return domain.BillSession{}, nil, err
+	}
+	if session.Status != domain.BillSessionActive {
+		return domain.BillSession{}, nil, fmt.Errorf("счет уже закрыт")
+	}
+	if !force {
+		for _, item := range session.Items {
+			if item.Remaining != 0 {
+				return domain.BillSession{}, nil, fmt.Errorf("не все позиции распределены")
+			}
+		}
+	}
+	summary := s.calculateSummary(session)
+	session.Status = domain.BillSessionFinished
+	if err := s.billRepo.Update(ctx, session); err != nil {
+		return domain.BillSession{}, nil, err
+	}
+	return session, summary, nil
+}
+
 func (s *BillService) HasUnassignedItems(ctx context.Context, chatID int64) (bool, error) {
 	session, err := s.billRepo.FindActiveByChatID(ctx, chatID)
 	if err != nil {
@@ -343,6 +437,14 @@ func (s *BillService) HasUnassignedItems(ctx context.Context, chatID int64) (boo
 
 func (s *BillService) Summary(ctx context.Context, chatID int64) (domain.BillSession, []domain.BillParticipantSummary, error) {
 	session, err := s.billRepo.FindActiveByChatID(ctx, chatID)
+	if err != nil {
+		return domain.BillSession{}, nil, err
+	}
+	return session, s.calculateSummary(session), nil
+}
+
+func (s *BillService) SummaryBySessionID(ctx context.Context, sessionID string) (domain.BillSession, []domain.BillParticipantSummary, error) {
+	session, err := s.billRepo.FindByID(ctx, sessionID)
 	if err != nil {
 		return domain.BillSession{}, nil, err
 	}
@@ -385,7 +487,6 @@ func (s *BillService) LatestUserSummary(ctx context.Context, chatIDs []int64, us
 func (s *BillService) calculateSummary(session domain.BillSession) []domain.BillParticipantSummary {
 	userNameByID := make(map[int64]string)
 	subtotalByUser := make(map[int64]decimal.Decimal)
-	totalAssigned := decimal.Zero
 
 	for _, assignment := range session.Assignments {
 		userNameByID[assignment.UserID] = assignment.UserName
@@ -408,28 +509,31 @@ func (s *BillService) calculateSummary(session domain.BillSession) []domain.Bill
 			assignedQuantity += assignment.Quantity
 		}
 
-		if assignedQuantity > item.Quantity {
+		divisor := item.Quantity
+		if item.IsSharedSingleton() {
+			divisor = max(item.EffectiveQuantity(), assignedQuantity)
+		}
+
+		if assignedQuantity > item.Quantity && !item.IsSharedSingleton() {
 			share := item.LineTotal.Div(decimal.NewFromInt(int64(assignedQuantity)))
 			for _, assignment := range assignments {
 				linePart := share.Mul(decimal.NewFromInt(int64(assignment.Quantity)))
 				subtotalByUser[assignment.UserID] = subtotalByUser[assignment.UserID].Add(linePart)
-				totalAssigned = totalAssigned.Add(linePart)
 			}
 			continue
 		}
 
 		for _, assignment := range assignments {
-			linePart := item.UnitPrice.Mul(decimal.NewFromInt(int64(assignment.Quantity)))
+			linePart := item.LineTotal.Div(decimal.NewFromInt(int64(divisor))).Mul(decimal.NewFromInt(int64(assignment.Quantity)))
 			subtotalByUser[assignment.UserID] = subtotalByUser[assignment.UserID].Add(linePart)
-			totalAssigned = totalAssigned.Add(linePart)
 		}
 	}
 
 	summary := make([]domain.BillParticipantSummary, 0, len(subtotalByUser))
 	for userID, subtotal := range subtotalByUser {
 		serviceShare := decimal.Zero
-		if totalAssigned.GreaterThan(decimal.Zero) && session.ServiceAmount.GreaterThan(decimal.Zero) {
-			serviceShare = session.ServiceAmount.Mul(subtotal).Div(totalAssigned)
+		if session.ItemsSubtotal.GreaterThan(decimal.Zero) && session.ServiceAmount.GreaterThan(decimal.Zero) {
+			serviceShare = session.ServiceAmount.Mul(subtotal).Div(session.ItemsSubtotal)
 		}
 		summary = append(summary, domain.BillParticipantSummary{
 			UserID:       userID,

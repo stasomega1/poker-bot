@@ -143,13 +143,14 @@ type billSessionDocument struct {
 }
 
 type billItemDocument struct {
-	Index     int    `bson:"index"`
-	Name      string `bson:"name"`
-	Quantity  int    `bson:"quantity"`
-	UnitPrice string `bson:"unit_price"`
-	LineTotal string `bson:"line_total"`
-	Assigned  int    `bson:"assigned"`
-	Remaining int    `bson:"remaining"`
+	Index                int    `bson:"index"`
+	Name                 string `bson:"name"`
+	Quantity             int    `bson:"quantity"`
+	UnitPrice            string `bson:"unit_price"`
+	LineTotal            string `bson:"line_total"`
+	ExpectedParticipants int    `bson:"expected_participants,omitempty"`
+	Assigned             int    `bson:"assigned"`
+	Remaining            int    `bson:"remaining"`
 }
 
 type billAssignmentDocument struct {
@@ -172,13 +173,14 @@ func billSessionDocumentFromDomain(session domain.BillSession) (billSessionDocum
 	items := make([]billItemDocument, 0, len(session.Items))
 	for _, item := range session.Items {
 		items = append(items, billItemDocument{
-			Index:     item.Index,
-			Name:      item.Name,
-			Quantity:  item.Quantity,
-			UnitPrice: item.UnitPrice.String(),
-			LineTotal: item.LineTotal.String(),
-			Assigned:  item.Assigned,
-			Remaining: item.Remaining,
+			Index:                item.Index,
+			Name:                 item.Name,
+			Quantity:             item.Quantity,
+			UnitPrice:            item.UnitPrice.String(),
+			LineTotal:            item.LineTotal.String(),
+			ExpectedParticipants: item.ExpectedParticipants,
+			Assigned:             item.Assigned,
+			Remaining:            item.Remaining,
 		})
 	}
 
@@ -241,13 +243,14 @@ func (d billSessionDocument) toDomain() (domain.BillSession, error) {
 			return domain.BillSession{}, err
 		}
 		items = append(items, domain.BillItem{
-			Index:     item.Index,
-			Name:      item.Name,
-			Quantity:  item.Quantity,
-			UnitPrice: unitPrice,
-			LineTotal: lineTotal,
-			Assigned:  item.Assigned,
-			Remaining: item.Remaining,
+			Index:                item.Index,
+			Name:                 item.Name,
+			Quantity:             item.Quantity,
+			UnitPrice:            unitPrice,
+			LineTotal:            lineTotal,
+			ExpectedParticipants: max(item.ExpectedParticipants, 1),
+			Assigned:             item.Assigned,
+			Remaining:            item.Remaining,
 		})
 	}
 

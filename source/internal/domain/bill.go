@@ -38,13 +38,32 @@ type BillSession struct {
 }
 
 type BillItem struct {
-	Index     int             `bson:"index"`
-	Name      string          `bson:"name"`
-	Quantity  int             `bson:"quantity"`
-	UnitPrice decimal.Decimal `bson:"unit_price"`
-	LineTotal decimal.Decimal `bson:"line_total"`
-	Assigned  int             `bson:"assigned"`
-	Remaining int             `bson:"remaining"`
+	Index                int             `bson:"index"`
+	Name                 string          `bson:"name"`
+	Quantity             int             `bson:"quantity"`
+	UnitPrice            decimal.Decimal `bson:"unit_price"`
+	LineTotal            decimal.Decimal `bson:"line_total"`
+	ExpectedParticipants int             `bson:"expected_participants"`
+	Assigned             int             `bson:"assigned"`
+	Remaining            int             `bson:"remaining"`
+}
+
+func (i BillItem) EffectiveQuantity() int {
+	if i.Quantity == 1 {
+		if i.ExpectedParticipants > 1 {
+			return i.ExpectedParticipants
+		}
+		return 1
+	}
+	return i.Quantity
+}
+
+func (i BillItem) IsSharedSingleton() bool {
+	return i.Quantity == 1 && i.EffectiveQuantity() > 1
+}
+
+func (i BillItem) ProgressCapacity() int {
+	return max(i.EffectiveQuantity(), i.Assigned)
 }
 
 type BillAssignment struct {

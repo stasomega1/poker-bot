@@ -2,16 +2,19 @@ package app
 
 import (
 	"context"
+	"log"
 
 	"poker-bot/internal/config"
 	mongostorage "poker-bot/internal/repository/mongo"
 	"poker-bot/internal/service"
 	"poker-bot/internal/telegram"
+	"poker-bot/internal/webapp"
 )
 
 type App struct {
-	bot    *telegram.Bot
-	client *mongostorage.Client
+	bot       *telegram.Bot
+	webServer *webapp.Server
+	client    *mongostorage.Client
 }
 
 func New(cfg config.Config) (*App, error) {
@@ -43,18 +46,71 @@ func New(cfg config.Config) (*App, error) {
 		return nil, err
 	}
 
+	webServer, err := webapp.NewServer(
+		cfg.HTTPAddr,
+		billService,
+		webapp.NewInitDataValidator(cfg.BotToken, bot.BotID(), cfg.InitDataMaxAge),
+		bot,
+		buildWebAppDevAuth(cfg),
+	)
+	if err != nil {
+		_ = client.Close(context.Background())
+		return nil, err
+	}
+	if cfg.WebAppBaseURL == "" {
+		log.Printf("mini app button disabled: WEBAPP_BASE_URL is empty")
+	} else if cfg.WebAppBaseURL[:min(len(cfg.WebAppBaseURL), len("https://"))] != "https://" {
+		log.Printf("mini app local mode: WEBAPP_BASE_URL=%s uses URL buttons instead of Telegram web_app buttons", cfg.WebAppBaseURL)
+	} else {
+		log.Printf("mini app enabled: WEBAPP_BASE_URL=%s", cfg.WebAppBaseURL)
+	}
+	if cfg.WebAppDevMode {
+		log.Printf("mini app dev auth enabled: user_id=%d username=%s", cfg.WebAppDevUserID, cfg.WebAppDevUsername)
+	}
+
 	return &App{
-		bot:    bot,
-		client: client,
+		bot:       bot,
+		webServer: webServer,
+		client:    client,
 	}, nil
 }
 
+func buildWebAppDevAuth(cfg config.Config) *webapp.AuthData {
+	if !cfg.WebAppDevMode {
+		return nil
+	}
+	return &webapp.AuthData{
+		User: webapp.TelegramUser{
+			ID:        cfg.WebAppDevUserID,
+			Username:  cfg.WebAppDevUsername,
+			FirstName: cfg.WebAppDevFirstName,
+			LastName:  cfg.WebAppDevLastName,
+		},
+	}
+}
+
 func (a *App) Run(ctx context.Context) error {
-	return a.bot.Run(ctx)
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	errCh := make(chan error, 2)
+	go func() {
+		errCh <- a.webServer.Run(runCtx)
+	}()
+	go func() {
+		errCh <- a.bot.Run(runCtx)
+	}()
+
+	err := <-errCh
+	cancel()
+	return err
 }
 
 func (a *App) Close(ctx context.Context) error {
 	if err := a.bot.Close(); err != nil {
+		return err
+	}
+	if err := a.webServer.Shutdown(ctx); err != nil {
 		return err
 	}
 

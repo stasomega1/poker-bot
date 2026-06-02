@@ -2,10 +2,12 @@ package telegram
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -43,6 +45,7 @@ type Bot struct {
 	messageStore    *messageStore
 	registrarUserID int64
 	membershipCache *membershipCache
+	webAppBaseURL   string
 }
 
 type personalAction string
@@ -99,6 +102,7 @@ func NewBot(cfg config.Config, gameService *service.GameService, settingsService
 		messageStore:    newMessageStore(maxStoredMessagesPerChat),
 		registrarUserID: cfg.RegistrarUserID,
 		membershipCache: newMembershipCache(membershipCacheTTL),
+		webAppBaseURL:   strings.TrimRight(cfg.WebAppBaseURL, "/"),
 	}, nil
 }
 
@@ -142,6 +146,10 @@ func (b *Bot) Run(ctx context.Context) error {
 func (b *Bot) Close() error {
 	b.api.StopReceivingUpdates()
 	return nil
+}
+
+func (b *Bot) BotID() int64 {
+	return b.api.Self.ID
 }
 
 func (b *Bot) handleMessage(ctx context.Context, message *tgbotapi.Message) {
@@ -226,6 +234,8 @@ func (b *Bot) handleMessage(ctx context.Context, message *tgbotapi.Message) {
 		b.handleBillPhoto(ctx, message)
 	case "debug":
 		b.handleBillDebug(ctx, message)
+	case "app":
+		b.handleBillApp(ctx, message)
 	default:
 		log.Printf("unknown command: chat_id=%d message_id=%d command=%q", message.Chat.ID, message.MessageID, message.Command())
 	}
@@ -355,7 +365,7 @@ func (b *Bot) handleCallbackQuery(ctx context.Context, query *tgbotapi.CallbackQ
 			return
 		}
 
-		b.finishBillSession(ctx, query.Message.Chat.ID, query.Message.MessageID, false)
+		b.finishBillSession(ctx, query.Message.Chat.ID, query.Message.MessageID, false, displayUserName(query.From))
 		return
 	}
 
@@ -371,7 +381,7 @@ func (b *Bot) handleCallbackQuery(ctx context.Context, query *tgbotapi.CallbackQ
 		}
 
 		b.answerCallback(query.ID, "")
-		b.finishBillSession(ctx, query.Message.Chat.ID, query.Message.MessageID, true)
+		b.finishBillSession(ctx, query.Message.Chat.ID, query.Message.MessageID, true, displayUserName(query.From))
 		return
 	}
 
@@ -420,7 +430,7 @@ func (b *Bot) handleCallbackQuery(ctx context.Context, query *tgbotapi.CallbackQ
 		if _, err := b.api.Request(deleteMsg); err != nil {
 			log.Printf("delete bill cancel confirmation failed: chat_id=%d message_id=%d err=%v", query.Message.Chat.ID, query.Message.MessageID, err)
 		}
-		b.handleBillCancel(ctx, query.Message.Chat.ID, query.Message.MessageID)
+		b.handleBillCancel(ctx, query.Message.Chat.ID, query.Message.MessageID, displayUserName(query.From))
 		return
 	}
 
@@ -1121,6 +1131,19 @@ func (b *Bot) handleBillDebug(ctx context.Context, message *tgbotapi.Message) {
 	b.editBillMessage(message.Chat.ID, placeholderMsg.MessageID, session)
 }
 
+func (b *Bot) handleBillApp(ctx context.Context, message *tgbotapi.Message) {
+	if b.webAppBaseURL == "" {
+		b.reply(message.Chat.ID, message.MessageID, "Mini App не настроен: WEBAPP_BASE_URL пустой.")
+		return
+	}
+	session, err := b.billService.GetActive(ctx, message.Chat.ID)
+	if err != nil {
+		b.reply(message.Chat.ID, message.MessageID, fmt.Sprintf("Не удалось получить активный счет: %v", err))
+		return
+	}
+	b.sendBillWebAppButton(message.Chat.ID, message.MessageID, session)
+}
+
 func (b *Bot) handleBillSum(ctx context.Context, chatID int64, replyTo int) {
 	session, summary, err := b.billService.Summary(ctx, chatID)
 	if err != nil {
@@ -1171,10 +1194,10 @@ func (b *Bot) handlePrivateBillMy(ctx context.Context, message *tgbotapi.Message
 }
 
 func (b *Bot) handleBillFinish(ctx context.Context, chatID int64, replyTo int) {
-	b.finishBillSession(ctx, chatID, replyTo, false)
+	b.finishBillSession(ctx, chatID, replyTo, false, "")
 }
 
-func (b *Bot) finishBillSession(ctx context.Context, chatID int64, replyTo int, force bool) {
+func (b *Bot) finishBillSession(ctx context.Context, chatID int64, replyTo int, force bool, actorName string) {
 	session, summary, err := b.billService.Finish(ctx, chatID, force)
 	if err != nil {
 		b.reply(chatID, replyTo, fmt.Sprintf("Не удалось закрыть счет: %v", err))
@@ -1183,10 +1206,10 @@ func (b *Bot) finishBillSession(ctx context.Context, chatID int64, replyTo int, 
 	if session.MenuMessageID != 0 {
 		b.editBillMessage(chatID, session.MenuMessageID, session)
 	}
-	b.reply(chatID, replyTo, renderBillFinish(session, summary))
+	b.reply(chatID, replyTo, renderBillFinish(session, summary, actorName))
 }
 
-func (b *Bot) handleBillCancel(ctx context.Context, chatID int64, replyTo int) {
+func (b *Bot) handleBillCancel(ctx context.Context, chatID int64, replyTo int, actorName string) {
 	session, err := b.billService.Cancel(ctx, chatID)
 	if err != nil {
 		b.reply(chatID, replyTo, fmt.Sprintf("Не удалось отменить счет: %v", err))
@@ -1200,10 +1223,15 @@ func (b *Bot) handleBillCancel(ctx context.Context, chatID int64, replyTo int) {
 			log.Printf("edit cancelled bill failed: chat_id=%d message_id=%d err=%v", chatID, session.MenuMessageID, err)
 		}
 	}
-	b.reply(chatID, replyTo, "Счет отменен.")
+	b.reply(chatID, replyTo, renderBillCancelled(actorName))
 }
 
 func (b *Bot) editBillMessage(chatID int64, messageID int, session domain.BillSession) {
+	if b.webAppBaseURL != "" {
+		b.editBillMessageRaw(chatID, messageID, session)
+		return
+	}
+
 	edit := tgbotapi.NewEditMessageText(chatID, messageID, renderBillSession(session))
 	edit.ParseMode = tgbotapi.ModeHTML
 	if session.Status == domain.BillSessionActive {
@@ -1216,6 +1244,126 @@ func (b *Bot) editBillMessage(chatID int64, messageID int, session domain.BillSe
 	if _, err := b.api.Send(edit); err != nil {
 		log.Printf("edit bill message failed: chat_id=%d message_id=%d err=%v", chatID, messageID, err)
 	}
+}
+
+func (b *Bot) editBillMessageRaw(chatID int64, messageID int, session domain.BillSession) {
+	replyMarkup, err := json.Marshal(billWebAppReplyMarkup(session, b.billWebAppURL(session.ID), true))
+	if err != nil {
+		log.Printf("marshal bill webapp markup failed: session_id=%s err=%v", session.ID, err)
+		return
+	}
+
+	params := tgbotapi.Params{
+		"chat_id":      strconv.FormatInt(chatID, 10),
+		"message_id":   strconv.Itoa(messageID),
+		"text":         renderBillSession(session),
+		"parse_mode":   tgbotapi.ModeHTML,
+		"reply_markup": string(replyMarkup),
+	}
+	if _, err := b.api.MakeRequest("editMessageText", params); err != nil {
+		if b.tryFallbackBillMessageMarkup(chatID, messageID, session, err) {
+			return
+		}
+		log.Printf("edit bill webapp message failed: chat_id=%d message_id=%d err=%v", chatID, messageID, err)
+	}
+}
+
+func (b *Bot) sendBillWebAppButton(chatID int64, replyTo int, session domain.BillSession) {
+	replyMarkup, err := json.Marshal(rawInlineKeyboardMarkup{
+		InlineKeyboard: [][]rawInlineKeyboardButton{
+			{
+				billOpenButton(b.billWebAppURL(session.ID), true),
+			},
+		},
+	})
+	if err != nil {
+		log.Printf("marshal bill webapp button failed: session_id=%s err=%v", session.ID, err)
+		return
+	}
+
+	params := tgbotapi.Params{
+		"chat_id":      strconv.FormatInt(chatID, 10),
+		"text":         "Открыть активный счет",
+		"reply_markup": string(replyMarkup),
+	}
+	if replyTo != 0 {
+		params["reply_to_message_id"] = strconv.Itoa(replyTo)
+	}
+	if _, err := b.api.MakeRequest("sendMessage", params); err != nil {
+		if b.tryFallbackBillOpenButton(chatID, replyTo, session, err) {
+			return
+		}
+		log.Printf("send bill webapp button failed: chat_id=%d reply_to=%d err=%v", chatID, replyTo, err)
+	}
+}
+
+func (b *Bot) tryFallbackBillMessageMarkup(chatID int64, messageID int, session domain.BillSession, sendErr error) bool {
+	if !isWebAppButtonInvalid(sendErr) {
+		return false
+	}
+
+	replyMarkup, err := json.Marshal(billWebAppReplyMarkup(session, b.billWebAppURL(session.ID), false))
+	if err != nil {
+		log.Printf("marshal fallback bill markup failed: session_id=%s err=%v", session.ID, err)
+		return false
+	}
+
+	params := tgbotapi.Params{
+		"chat_id":      strconv.FormatInt(chatID, 10),
+		"message_id":   strconv.Itoa(messageID),
+		"text":         renderBillSession(session),
+		"parse_mode":   tgbotapi.ModeHTML,
+		"reply_markup": string(replyMarkup),
+	}
+	if _, err := b.api.MakeRequest("editMessageText", params); err != nil {
+		log.Printf("fallback bill message markup failed: chat_id=%d message_id=%d err=%v", chatID, messageID, err)
+		return false
+	}
+
+	log.Printf("web_app button rejected, fell back to url button: chat_id=%d message_id=%d session_id=%s", chatID, messageID, session.ID)
+	return true
+}
+
+func (b *Bot) tryFallbackBillOpenButton(chatID int64, replyTo int, session domain.BillSession, sendErr error) bool {
+	if !isWebAppButtonInvalid(sendErr) {
+		return false
+	}
+
+	replyMarkup, err := json.Marshal(rawInlineKeyboardMarkup{
+		InlineKeyboard: [][]rawInlineKeyboardButton{
+			{
+				billOpenButton(b.billWebAppURL(session.ID), false),
+			},
+		},
+	})
+	if err != nil {
+		log.Printf("marshal fallback bill open button failed: session_id=%s err=%v", session.ID, err)
+		return false
+	}
+
+	params := tgbotapi.Params{
+		"chat_id":      strconv.FormatInt(chatID, 10),
+		"text":         "Открыть активный счет",
+		"reply_markup": string(replyMarkup),
+	}
+	if replyTo != 0 {
+		params["reply_to_message_id"] = strconv.Itoa(replyTo)
+	}
+	if _, err := b.api.MakeRequest("sendMessage", params); err != nil {
+		log.Printf("fallback bill open button failed: chat_id=%d reply_to=%d err=%v", chatID, replyTo, err)
+		return false
+	}
+
+	log.Printf("web_app open button rejected, sent url button instead: chat_id=%d reply_to=%d session_id=%s", chatID, replyTo, session.ID)
+	return true
+}
+
+func isWebAppButtonInvalid(err error) bool {
+	if err == nil {
+		return false
+	}
+	value := err.Error()
+	return strings.Contains(value, "BUTTON_TYPE_INVALID") || strings.Contains(value, "BUTTON_URL_INVALID")
 }
 
 func (b *Bot) editBillPlaceholderError(chatID int64, messageID int, text string) {
@@ -1394,6 +1542,34 @@ func (b *Bot) userHasAccessToChat(ctx context.Context, chatID, userID int64) (bo
 	})
 
 	return allowed, title, nil
+}
+
+func (b *Bot) UserHasAccessToChat(ctx context.Context, chatID, userID int64) (bool, string, error) {
+	return b.userHasAccessToChat(ctx, chatID, userID)
+}
+
+func (b *Bot) RefreshBillMessage(ctx context.Context, session domain.BillSession) {
+	if session.MenuMessageID == 0 {
+		return
+	}
+	b.editBillMessage(session.ChatID, session.MenuMessageID, session)
+}
+
+func (b *Bot) PublishBillFinished(ctx context.Context, session domain.BillSession, summary []domain.BillParticipantSummary) {
+	replyTo := session.MenuMessageID
+	b.reply(session.ChatID, replyTo, renderBillFinish(session, summary, ""))
+}
+
+func (b *Bot) PublishBillCancelled(ctx context.Context, session domain.BillSession) {
+	if session.MenuMessageID != 0 {
+		edit := tgbotapi.NewEditMessageText(session.ChatID, session.MenuMessageID, "Счет отменен.")
+		emptyMarkup := tgbotapi.InlineKeyboardMarkup{InlineKeyboard: [][]tgbotapi.InlineKeyboardButton{}}
+		edit.ReplyMarkup = &emptyMarkup
+		if _, err := b.api.Send(edit); err != nil {
+			log.Printf("edit cancelled bill from webapp failed: chat_id=%d message_id=%d err=%v", session.ChatID, session.MenuMessageID, err)
+		}
+	}
+	b.reply(session.ChatID, session.MenuMessageID, renderBillCancelled(""))
 }
 
 func (b *Bot) fetchAndSyncChatTitle(ctx context.Context, chatID int64) (string, error) {
@@ -1756,6 +1932,85 @@ func billReplyMarkup(session domain.BillSession) tgbotapi.InlineKeyboardMarkup {
 		rows = append(rows, row)
 	}
 	return tgbotapi.NewInlineKeyboardMarkup(rows...)
+}
+
+type webAppInfo struct {
+	URL string `json:"url"`
+}
+
+type rawInlineKeyboardButton struct {
+	Text         string      `json:"text"`
+	URL          string      `json:"url,omitempty"`
+	CallbackData string      `json:"callback_data,omitempty"`
+	WebApp       *webAppInfo `json:"web_app,omitempty"`
+}
+
+type rawInlineKeyboardMarkup struct {
+	InlineKeyboard [][]rawInlineKeyboardButton `json:"inline_keyboard"`
+}
+
+func billWebAppReplyMarkup(session domain.BillSession, webAppURL string, preferWebApp bool) rawInlineKeyboardMarkup {
+	rows := make([][]rawInlineKeyboardButton, 0)
+	if session.Status == domain.BillSessionActive && webAppURL != "" {
+		rows = append(rows, []rawInlineKeyboardButton{
+			billOpenButton(webAppURL, preferWebApp),
+		})
+	}
+
+	if session.Status == domain.BillSessionActive {
+		for _, specRow := range billKeyboard(session) {
+			row := make([]rawInlineKeyboardButton, 0, len(specRow))
+			for _, spec := range specRow {
+				row = append(row, rawInlineKeyboardButton{
+					Text:         spec.Text,
+					CallbackData: spec.Data,
+				})
+			}
+			rows = append(rows, row)
+		}
+	}
+
+	return rawInlineKeyboardMarkup{InlineKeyboard: rows}
+}
+
+func billOpenButton(webAppURL string, preferWebApp bool) rawInlineKeyboardButton {
+	button := rawInlineKeyboardButton{
+		Text: "Открыть счет",
+	}
+	if isTelegramMiniAppLink(webAppURL) {
+		button.URL = webAppURL
+		return button
+	}
+	if preferWebApp && strings.HasPrefix(strings.ToLower(webAppURL), "https://") {
+		button.WebApp = &webAppInfo{URL: webAppURL}
+		return button
+	}
+	button.URL = webAppURL
+	return button
+}
+
+func (b *Bot) billWebAppURL(sessionID string) string {
+	if b.webAppBaseURL == "" || sessionID == "" {
+		return ""
+	}
+	if botUsername := strings.TrimSpace(b.api.Self.UserName); botUsername != "" && !isLocalWebAppBaseURL(b.webAppBaseURL) {
+		return "https://t.me/" + botUsername + "?startapp=" + urlQueryEscape(sessionID)
+	}
+	return b.webAppBaseURL + "/app/?session_id=" + urlQueryEscape(sessionID)
+}
+
+func urlQueryEscape(value string) string {
+	return url.QueryEscape(value)
+}
+
+func isTelegramMiniAppLink(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	return strings.HasPrefix(value, "https://t.me/")
+}
+
+func isLocalWebAppBaseURL(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	return strings.Contains(value, "127.0.0.1") || strings.Contains(value, "localhost")
 }
 
 func isBillPhotoCommand(message *tgbotapi.Message) bool {
