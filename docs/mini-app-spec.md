@@ -24,6 +24,7 @@ This file is no longer only a proposal. It now serves as a living implementation
   - one message with buy-ins;
   - one reply message with results;
   - `/game` as a reply to the results message.
+- `/regame`, sent as a reply to the original `/game`, recalculates and replaces only the latest saved game after the buy-ins or results message has been edited.
 - The bot parses player names and amounts.
 - The bot calculates winners, losses, total buy-ins, and settlements.
 - Game history and stats are stored by `chat_id`.

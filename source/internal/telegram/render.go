@@ -10,8 +10,16 @@ import (
 )
 
 func renderGameSummary(game domain.Game) string {
+	return renderGameSummaryWithStatus(game, "Игра сохранена.")
+}
+
+func renderRecalculatedGameSummary(game domain.Game) string {
+	return renderGameSummaryWithStatus(game, "Последняя игра пересчитана.")
+}
+
+func renderGameSummaryWithStatus(game domain.Game, status string) string {
 	lines := []string{
-		"Игра сохранена.",
+		status,
 		fmt.Sprintf("Дата сессии: %s", game.SessionDate),
 		fmt.Sprintf("Цена байина: %s тг", formatDecimal(game.BuyInPriceKZT)),
 		fmt.Sprintf("Общий банк: %s байинов", formatDecimal(game.TotalBuyIns)),
@@ -51,6 +59,7 @@ func helpText() string {
 		"Команды:",
 		"/reg — зарегистрировать чат",
 		"/game — сохранить игру по цепочке reply",
+		"/regame — пересчитать последнюю игру после редактирования исходных сообщений",
 		"/setbuyin 2500 — изменить цену байина",
 		"/bill — отправить фото чека с подписью /bill или /bill @payer",
 		"/debug — создать тестовый счет без OCR",

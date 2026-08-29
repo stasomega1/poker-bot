@@ -27,6 +27,20 @@ func (r *GameRepository) Create(ctx context.Context, game domain.Game) error {
 	return err
 }
 
+func (r *GameRepository) Replace(ctx context.Context, game domain.Game) error {
+	result, err := r.collection.UpdateOne(ctx, bson.M{
+		"chat_id":     game.ChatID,
+		"game_number": game.GameNumber,
+	}, bson.M{"$set": gameDocumentFromDomain(game)})
+	if err != nil {
+		return err
+	}
+	if result.MatchedCount == 0 {
+		return ErrGameNotFound
+	}
+	return nil
+}
+
 func (r *GameRepository) ListRecentByChatID(ctx context.Context, chatID int64, limit int64) ([]domain.Game, error) {
 	opts := options.Find().SetSort(bson.D{{Key: "created_at", Value: -1}}).SetLimit(limit)
 	cursor, err := r.collection.Find(ctx, bson.M{"chat_id": chatID}, opts)
@@ -80,6 +94,19 @@ func (r *GameRepository) ListAllByChatID(ctx context.Context, chatID int64) ([]d
 func (r *GameRepository) FindByChatIDAndGameNumber(ctx context.Context, chatID int64, gameNumber int) (domain.Game, error) {
 	var document gameDocument
 	err := r.collection.FindOne(ctx, bson.M{"chat_id": chatID, "game_number": gameNumber}).Decode(&document)
+	if errors.Is(err, driver.ErrNoDocuments) {
+		return domain.Game{}, ErrGameNotFound
+	}
+	if err != nil {
+		return domain.Game{}, err
+	}
+	return document.toDomain()
+}
+
+func (r *GameRepository) FindLatestByChatID(ctx context.Context, chatID int64) (domain.Game, error) {
+	opts := options.FindOne().SetSort(bson.D{{Key: "game_number", Value: -1}})
+	var document gameDocument
+	err := r.collection.FindOne(ctx, bson.M{"chat_id": chatID}, opts).Decode(&document)
 	if errors.Is(err, driver.ErrNoDocuments) {
 		return domain.Game{}, ErrGameNotFound
 	}

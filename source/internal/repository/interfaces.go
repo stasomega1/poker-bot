@@ -18,8 +18,10 @@ type AllowedChatRepository interface {
 
 type GameRepository interface {
 	Create(ctx context.Context, game domain.Game) error
+	Replace(ctx context.Context, game domain.Game) error
 	ListRecentByChatID(ctx context.Context, chatID int64, limit int64) ([]domain.Game, error)
 	ListAllByChatID(ctx context.Context, chatID int64) ([]domain.Game, error)
+	FindLatestByChatID(ctx context.Context, chatID int64) (domain.Game, error)
 	FindByChatIDAndGameNumber(ctx context.Context, chatID int64, gameNumber int) (domain.Game, error)
 	NextGameNumber(ctx context.Context, chatID int64) (int, error)
 	BackfillGameNumbers(ctx context.Context) error

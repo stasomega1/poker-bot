@@ -3,6 +3,7 @@ package telegram
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -15,6 +16,7 @@ import (
 
 	"poker-bot/internal/config"
 	"poker-bot/internal/domain"
+	mongorepo "poker-bot/internal/repository/mongo"
 	"poker-bot/internal/service"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -222,6 +224,8 @@ func (b *Bot) handleMessage(ctx context.Context, message *tgbotapi.Message) {
 		b.handleSetBuyIn(ctx, message)
 	case "game":
 		b.handleGame(ctx, message)
+	case "regame":
+		b.handleRegame(ctx, message)
 	case "history":
 		b.handleGroupHistory(ctx, message.Chat.ID, message.Chat.Title, message.Chat.ID, message.MessageID)
 	case "stats":
@@ -706,6 +710,60 @@ func (b *Bot) handleGame(ctx context.Context, message *tgbotapi.Message) {
 	}
 
 	b.reply(message.Chat.ID, message.MessageID, renderGameSummary(game))
+}
+
+func (b *Bot) handleRegame(ctx context.Context, message *tgbotapi.Message) {
+	if message.ReplyToMessage == nil {
+		b.reply(message.Chat.ID, message.MessageID, "Команда /regame должна быть ответом на команду /game последней игры.")
+		return
+	}
+
+	latest, err := b.gameService.LatestGame(ctx, message.Chat.ID)
+	if errors.Is(err, mongorepo.ErrGameNotFound) {
+		b.reply(message.Chat.ID, message.MessageID, "В этом чате еще нет сохраненных игр.")
+		return
+	}
+	if err != nil {
+		b.reply(message.Chat.ID, message.MessageID, fmt.Sprintf("Не удалось найти последнюю игру: %v", err))
+		return
+	}
+	if latest.SourceCommandMessageID != message.ReplyToMessage.MessageID {
+		b.reply(message.Chat.ID, message.MessageID, "Пересчитать можно только последнюю игру: ответьте командой /regame на ее /game.")
+		return
+	}
+
+	buyInsRef := b.messageStore.Get(message.Chat.ID, latest.SourceBuyInsMessageID)
+	resultsRef := b.messageStore.Get(message.Chat.ID, latest.SourceResultsMessageID)
+	if buyInsRef == nil || resultsRef == nil {
+		b.reply(message.Chat.ID, message.MessageID, "Не удалось найти исходные сообщения последней игры среди последних сообщений чата.")
+		return
+	}
+
+	buyIns, winners, err := b.gameService.ParseInputs(buyInsRef.Text, resultsRef.Text)
+	if err != nil {
+		b.reply(message.Chat.ID, message.MessageID, fmt.Sprintf("Не удалось разобрать измененную игру: %v", err))
+		return
+	}
+
+	game, err := b.gameService.RecalculateLatestGame(
+		ctx,
+		message.Chat.ID,
+		message.ReplyToMessage.MessageID,
+		buyInsRef.Text,
+		resultsRef.Text,
+		buyIns,
+		winners,
+	)
+	if errors.Is(err, service.ErrRegameNotLatest) {
+		b.reply(message.Chat.ID, message.MessageID, "Пока выполнялся пересчет, появилась новая игра. Пересчитать можно только самую последнюю игру.")
+		return
+	}
+	if err != nil {
+		b.reply(message.Chat.ID, message.MessageID, fmt.Sprintf("Не удалось пересчитать игру: %v", err))
+		return
+	}
+
+	b.reply(message.Chat.ID, message.MessageID, renderRecalculatedGameSummary(game))
 }
 
 func (b *Bot) handlePrivateGroups(ctx context.Context, message *tgbotapi.Message) {
@@ -2107,6 +2165,7 @@ func personalHelpText() string {
 		"/start /help - показать это сообщение",
 		"/reg - зарегистрировать группу для игр (доступно только администратору бота)",
 		"/game - подсчитать результаты игры (доступно из зарегистрированной группы)",
+		"/regame - пересчитать последнюю игру; отправьте reply на ее /game",
 		"/setbuyin 2500 - изменить цену байина (2000 по умолчанию, доступно из зарегистрированной группы)",
 		"/bill - отправьте фото чека с подписью /bill или /bill @payer",
 		"/debug - создать тестовый счет без OCR",
