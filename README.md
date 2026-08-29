@@ -26,6 +26,9 @@
 - `HTTP_ADDR` — адрес HTTP-сервера для Mini App и API, по умолчанию `:8080`
 - `WEBAPP_BASE_URL` — публичный HTTPS URL приложения, например `https://example.com`
 - `TELEGRAM_INIT_DATA_MAX_AGE` — срок жизни Telegram Mini App init data, по умолчанию `24h`
+- `BILL_REMINDER_AFTER` — через сколько отправлять одноразовое напоминание по незакрытому счету, по умолчанию `66h`
+- `BILL_AUTO_CLOSE_AFTER` — через сколько автоматически закрывать счет, по умолчанию `90h`
+- `BILL_SWEEP_INTERVAL` — как часто проверять напоминания и автозакрытие, по умолчанию `10m`
 - `WEBAPP_DEV_MODE` — локальный dev-режим Mini App без Telegram init data
 - `WEBAPP_DEV_USER_ID` — `telegram user id` пользователя для dev-режима
 - `WEBAPP_DEV_USERNAME` — username для dev-режима, необязательно
@@ -211,11 +214,14 @@ WEBAPP_BASE_URL=http://127.0.0.1:8080
 WEBAPP_DEV_MODE=true
 WEBAPP_DEV_USER_ID=202999546
 WEBAPP_DEV_USERNAME=your_username
-BILL_AUTO_CLOSE_AFTER=0
-BILL_SWEEP_INTERVAL=5m
+BILL_REMINDER_AFTER=66h
+BILL_AUTO_CLOSE_AFTER=90h
+BILL_SWEEP_INTERVAL=10m
 ```
 
-`BILL_AUTO_CLOSE_AFTER` задаёт срок жизни активного счёта (`72h`, например). Значение `0` отключает автозакрытие. `BILL_SWEEP_INTERVAL` задаёт период проверки просроченных счетов.
+`BILL_REMINDER_AFTER` задаёт, через сколько активный счет один раз напомнит о нераспределённых позициях. Напоминание публикуется в чат reply на сообщение счета с текстом `Kind reminder, остались нераспределенные позиции` и списком всех позиций, у которых `Remaining > 0`.
+
+`BILL_AUTO_CLOSE_AFTER` задаёт срок жизни активного счёта (`90h` по умолчанию, то есть 3 дня 18 часов). `BILL_SWEEP_INTERVAL` задаёт период проверки напоминаний и просроченных счетов.
 
 В этом режиме страница `/app/` на `127.0.0.1` работает без Telegram init data.  
 Это только для локальной отладки.

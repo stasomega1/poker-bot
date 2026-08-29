@@ -22,6 +22,7 @@ type Config struct {
 	HTTPAddr           string
 	WebAppBaseURL      string
 	InitDataMaxAge     time.Duration
+	BillReminderAfter  time.Duration
 	BillAutoCloseAfter time.Duration
 	BillSweepInterval  time.Duration
 	WebAppDevMode      bool
@@ -72,13 +73,19 @@ func Load() (Config, error) {
 	}
 	cfg.InitDataMaxAge = initDataMaxAge
 
-	billAutoCloseAfter, err := time.ParseDuration(strings.TrimSpace(getEnv("BILL_AUTO_CLOSE_AFTER", "0")))
+	billReminderAfter, err := time.ParseDuration(strings.TrimSpace(getEnv("BILL_REMINDER_AFTER", "66h")))
+	if err != nil {
+		return Config{}, fmt.Errorf("parse BILL_REMINDER_AFTER: %w", err)
+	}
+	cfg.BillReminderAfter = billReminderAfter
+
+	billAutoCloseAfter, err := time.ParseDuration(strings.TrimSpace(getEnv("BILL_AUTO_CLOSE_AFTER", "90h")))
 	if err != nil {
 		return Config{}, fmt.Errorf("parse BILL_AUTO_CLOSE_AFTER: %w", err)
 	}
 	cfg.BillAutoCloseAfter = billAutoCloseAfter
 
-	billSweepInterval, err := time.ParseDuration(strings.TrimSpace(getEnv("BILL_SWEEP_INTERVAL", "5m")))
+	billSweepInterval, err := time.ParseDuration(strings.TrimSpace(getEnv("BILL_SWEEP_INTERVAL", "10m")))
 	if err != nil {
 		return Config{}, fmt.Errorf("parse BILL_SWEEP_INTERVAL: %w", err)
 	}
@@ -97,6 +104,8 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("HTTP_ADDR is required")
 	case cfg.InitDataMaxAge <= 0:
 		return Config{}, fmt.Errorf("TELEGRAM_INIT_DATA_MAX_AGE must be greater than zero")
+	case cfg.BillReminderAfter < 0:
+		return Config{}, fmt.Errorf("BILL_REMINDER_AFTER must not be negative")
 	case cfg.BillAutoCloseAfter < 0:
 		return Config{}, fmt.Errorf("BILL_AUTO_CLOSE_AFTER must not be negative")
 	case cfg.BillSweepInterval <= 0:

@@ -21,6 +21,8 @@ type BillSession struct {
 	Status               BillSessionStatus `bson:"status"`
 	CreatedAt            time.Time         `bson:"created_at"`
 	UpdatedAt            time.Time         `bson:"updated_at"`
+	ReminderAt           time.Time         `bson:"reminder_at,omitempty"`
+	ReminderSentAt       time.Time         `bson:"reminder_sent_at,omitempty"`
 	AutoCloseAt          time.Time         `bson:"auto_close_at,omitempty"`
 	CreatedByUserID      int64             `bson:"created_by_user_id"`
 	CreatedByName        string            `bson:"created_by_name"`

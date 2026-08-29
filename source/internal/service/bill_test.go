@@ -13,6 +13,7 @@ import (
 
 type fakeBillSessionRepository struct {
 	session        domain.BillSession
+	dueReminders   []domain.BillSession
 	expiredSession []domain.BillSession
 }
 
@@ -50,12 +51,26 @@ func (r *fakeBillSessionRepository) FindLatestByChatIDsAndUserID(ctx context.Con
 	return r.session, nil
 }
 
+func (r *fakeBillSessionRepository) FindDueReminders(ctx context.Context, before time.Time, limit int) ([]domain.BillSession, error) {
+	return append([]domain.BillSession(nil), r.dueReminders...), nil
+}
+
 func (r *fakeBillSessionRepository) FindExpiredActive(ctx context.Context, before time.Time, limit int) ([]domain.BillSession, error) {
 	return append([]domain.BillSession(nil), r.expiredSession...), nil
 }
 
 func (r *fakeBillSessionRepository) Update(ctx context.Context, session domain.BillSession) error {
 	r.session = session
+	for i := range r.dueReminders {
+		if r.dueReminders[i].ID == session.ID {
+			r.dueReminders[i] = session
+		}
+	}
+	for i := range r.expiredSession {
+		if r.expiredSession[i].ID == session.ID {
+			r.expiredSession[i] = session
+		}
+	}
 	return nil
 }
 
@@ -224,6 +239,7 @@ func TestSetExpectedParticipantsRecalculatesRemaining(t *testing.T) {
 func TestCreateDebugReceiptSetsAutoCloseAt(t *testing.T) {
 	repo := &fakeBillSessionRepository{}
 	service := NewBillService(repo, &fakeAllowedChatRepository{}, nil)
+	service.SetReminderAfter(24 * time.Hour)
 	service.SetAutoCloseAfter(72 * time.Hour)
 
 	before := time.Now().UTC()
@@ -239,6 +255,9 @@ func TestCreateDebugReceiptSetsAutoCloseAt(t *testing.T) {
 	maxExpected := before.Add(72 * time.Hour).Add(2 * time.Second)
 	if session.AutoCloseAt.Before(minExpected) || session.AutoCloseAt.After(maxExpected) {
 		t.Fatalf("unexpected auto close time: %s", session.AutoCloseAt)
+	}
+	if session.ReminderAt.IsZero() {
+		t.Fatal("expected reminder time to be set")
 	}
 }
 
@@ -287,5 +306,47 @@ func TestCloseExpiredSessionsFinishesAssignedBillsAndCancelsEmptyBills(t *testin
 	}
 	if len(closed[1].Summary) != 0 {
 		t.Fatalf("expected cancelled bill to have no summary rows, got %d", len(closed[1].Summary))
+	}
+}
+
+func TestSendDueRemindersReturnsOnlyBillsWithRemainingItems(t *testing.T) {
+	repo := &fakeBillSessionRepository{
+		dueReminders: []domain.BillSession{
+			{
+				ID:         "bill-remind",
+				Status:     domain.BillSessionActive,
+				ReminderAt: time.Now().Add(-time.Hour),
+				Items: []domain.BillItem{
+					{Index: 1, Name: "Tea", Quantity: 2, Remaining: 1},
+					{Index: 2, Name: "Cake", Quantity: 1, Remaining: 0},
+				},
+			},
+			{
+				ID:         "bill-skip",
+				Status:     domain.BillSessionActive,
+				ReminderAt: time.Now().Add(-time.Hour),
+				Items: []domain.BillItem{
+					{Index: 1, Name: "Coffee", Quantity: 1, Remaining: 0},
+				},
+			},
+		},
+	}
+	service := NewBillService(repo, nil, nil)
+
+	reminders, err := service.SendDueReminders(context.Background(), time.Now().UTC(), 10)
+	if err != nil {
+		t.Fatalf("SendDueReminders returned error: %v", err)
+	}
+	if len(reminders) != 1 {
+		t.Fatalf("expected 1 reminder, got %d", len(reminders))
+	}
+	if reminders[0].Session.ID != "bill-remind" {
+		t.Fatalf("unexpected reminder session: %s", reminders[0].Session.ID)
+	}
+	if repo.dueReminders[0].ReminderSentAt.IsZero() {
+		t.Fatal("expected reminder sent time for first bill")
+	}
+	if repo.dueReminders[1].ReminderSentAt.IsZero() {
+		t.Fatal("expected reminder sent time for second bill to avoid repeated sweeps")
 	}
 }

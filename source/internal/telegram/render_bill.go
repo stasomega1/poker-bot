@@ -149,6 +149,27 @@ func renderBillCancelled(actorName string) string {
 	return fmt.Sprintf("Счет отменен: %s", actorName)
 }
 
+func renderBillReminder(session domain.BillSession) string {
+	lines := []string{
+		"Kind reminder, остались нераспределенные позиции",
+		"",
+	}
+
+	for _, item := range session.Items {
+		if item.Remaining <= 0 {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("%d. %s - осталось %d/%d",
+			item.Index,
+			item.Name,
+			item.Remaining,
+			item.EffectiveQuantity(),
+		))
+	}
+
+	return strings.Join(lines, "\n")
+}
+
 func countAssignedUnits(session domain.BillSession) int {
 	total := 0
 	for _, item := range session.Items {

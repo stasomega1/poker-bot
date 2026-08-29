@@ -21,7 +21,12 @@ type BillService struct {
 	chatRepo       repository.AllowedChatRepository
 	ocr            ReceiptOCR
 	mu             sync.Mutex
+	reminderAfter  time.Duration
 	autoCloseAfter time.Duration
+}
+
+type BillReminder struct {
+	Session domain.BillSession
 }
 
 type AutoClosedBill struct {
@@ -42,6 +47,13 @@ func (s *BillService) SetAutoCloseAfter(value time.Duration) {
 	defer s.mu.Unlock()
 
 	s.autoCloseAfter = value
+}
+
+func (s *BillService) SetReminderAfter(value time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.reminderAfter = value
 }
 
 func (s *BillService) CreateFromReceipt(ctx context.Context, chatID int64, chatTitle string, creatorUserID int64, creatorName string, payerUserID int64, payerName string, photoFileID string, photoMessageID int, image []byte, mimeType string, onRetry func()) (domain.BillSession, error) {
@@ -114,6 +126,9 @@ func (s *BillService) createSessionFromParsedReceipt(ctx context.Context, chatID
 	}
 	if s.autoCloseAfter > 0 {
 		session.AutoCloseAt = time.Now().UTC().Add(s.autoCloseAfter)
+	}
+	if s.reminderAfter > 0 {
+		session.ReminderAt = time.Now().UTC().Add(s.reminderAfter)
 	}
 
 	return s.billRepo.Create(ctx, session)
@@ -536,6 +551,34 @@ func (s *BillService) CloseExpiredSessions(ctx context.Context, now time.Time, l
 	return results, nil
 }
 
+func (s *BillService) SendDueReminders(ctx context.Context, now time.Time, limit int) ([]BillReminder, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	due, err := s.billRepo.FindDueReminders(ctx, now.UTC(), limit)
+	if err != nil {
+		return nil, err
+	}
+
+	results := make([]BillReminder, 0, len(due))
+	for _, session := range due {
+		if session.Status != domain.BillSessionActive || !session.ReminderSentAt.IsZero() {
+			continue
+		}
+
+		session.ReminderSentAt = now.UTC()
+		if err := s.billRepo.Update(ctx, session); err != nil {
+			return nil, err
+		}
+		if countRemainingItems(session) == 0 {
+			continue
+		}
+		results = append(results, BillReminder{Session: session})
+	}
+
+	return results, nil
+}
+
 func (s *BillService) calculateSummary(session domain.BillSession) []domain.BillParticipantSummary {
 	userNameByID := make(map[int64]string)
 	subtotalByUser := make(map[int64]decimal.Decimal)
@@ -655,4 +698,14 @@ func debugParsedReceipt() domain.ParsedReceipt {
 			{Name: "Вода Tassay Excellent", Quantity: 1, UnitPrice: decimal.NewFromInt(3290), LineTotal: decimal.NewFromInt(3290)},
 		},
 	}
+}
+
+func countRemainingItems(session domain.BillSession) int {
+	count := 0
+	for _, item := range session.Items {
+		if item.Remaining > 0 {
+			count++
+		}
+	}
+	return count
 }

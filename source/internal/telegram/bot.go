@@ -1630,6 +1630,10 @@ func (b *Bot) PublishBillCancelled(ctx context.Context, session domain.BillSessi
 	b.reply(session.ChatID, session.MenuMessageID, renderBillCancelled(""))
 }
 
+func (b *Bot) PublishBillReminder(ctx context.Context, session domain.BillSession) {
+	b.reply(session.ChatID, session.MenuMessageID, renderBillReminder(session))
+}
+
 func (b *Bot) fetchAndSyncChatTitle(ctx context.Context, chatID int64) (string, error) {
 	chat, err := b.api.GetChat(tgbotapi.ChatInfoConfig{
 		ChatConfig: tgbotapi.ChatConfig{ChatID: chatID},

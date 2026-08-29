@@ -115,6 +115,7 @@
 - закрытие счета без `force` запрещено, пока есть `Remaining != 0`;
 - завершать/отменять счет может создатель счета или payer;
 - Mini App и Telegram-кнопки работают через один и тот же `BillService`.
+- при `BILL_REMINDER_AFTER > 0` активный счет один раз присылает reply-напоминание в чат, если к моменту reminder остаются нераспределённые позиции;
 - при `BILL_AUTO_CLOSE_AFTER > 0` активные счета автоматически завершаются, если есть распределённые позиции, или отменяются, если распределений нет;
 - OCR выполняет не более двух попыток: изображение экономно усиливается и поворачивается сначала на −15°, затем на +15°; после второй неудачи бот просит переснять чек.
 
@@ -208,8 +209,9 @@ Source of truth по конфигу:
 - `HTTP_ADDR` default: `:8080`
 - `WEBAPP_BASE_URL`
 - `TELEGRAM_INIT_DATA_MAX_AGE` default: `24h`
-- `BILL_AUTO_CLOSE_AFTER` default: `0` (автозакрытие отключено)
-- `BILL_SWEEP_INTERVAL` default: `5m`
+- `BILL_REMINDER_AFTER` default: `66h`
+- `BILL_AUTO_CLOSE_AFTER` default: `90h`
+- `BILL_SWEEP_INTERVAL` default: `10m`
 - `WEBAPP_DEV_MODE`
 - `WEBAPP_DEV_USER_ID`
 - `WEBAPP_DEV_USERNAME`

@@ -63,6 +63,49 @@ func (r *BillSessionRepository) FindActiveByChatID(ctx context.Context, chatID i
 	return document.toDomain()
 }
 
+func (r *BillSessionRepository) FindDueReminders(ctx context.Context, before time.Time, limit int) ([]domain.BillSession, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+
+	cursor, err := r.collection.Find(
+		ctx,
+		bson.M{
+			"status":           domain.BillSessionActive,
+			"reminder_at":      bson.M{"$lte": before.UTC()},
+			"reminder_sent_at": bson.M{"$exists": false},
+			"$or": []bson.M{
+				{"auto_close_at": bson.M{"$exists": false}},
+				{"auto_close_at": bson.M{"$gt": before.UTC()}},
+			},
+		},
+		options.Find().
+			SetSort(bson.D{{Key: "reminder_at", Value: 1}, {Key: "created_at", Value: 1}}).
+			SetLimit(int64(limit)),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	sessions := make([]domain.BillSession, 0)
+	for cursor.Next(ctx) {
+		var document billSessionDocument
+		if err := cursor.Decode(&document); err != nil {
+			return nil, err
+		}
+		session, err := document.toDomain()
+		if err != nil {
+			return nil, err
+		}
+		sessions = append(sessions, session)
+	}
+	if err := cursor.Err(); err != nil {
+		return nil, err
+	}
+	return sessions, nil
+}
+
 func (r *BillSessionRepository) FindExpiredActive(ctx context.Context, before time.Time, limit int) ([]domain.BillSession, error) {
 	if limit <= 0 {
 		limit = 100
@@ -164,6 +207,8 @@ type billSessionDocument struct {
 	Status               domain.BillSessionStatus `bson:"status"`
 	CreatedAt            time.Time                `bson:"created_at"`
 	UpdatedAt            time.Time                `bson:"updated_at"`
+	ReminderAt           time.Time                `bson:"reminder_at,omitempty"`
+	ReminderSentAt       time.Time                `bson:"reminder_sent_at,omitempty"`
 	AutoCloseAt          time.Time                `bson:"auto_close_at,omitempty"`
 	CreatedByUserID      int64                    `bson:"created_by_user_id"`
 	CreatedByName        string                   `bson:"created_by_name"`
@@ -240,6 +285,8 @@ func billSessionDocumentFromDomain(session domain.BillSession) (billSessionDocum
 		Status:               session.Status,
 		CreatedAt:            session.CreatedAt,
 		UpdatedAt:            session.UpdatedAt,
+		ReminderAt:           session.ReminderAt,
+		ReminderSentAt:       session.ReminderSentAt,
 		AutoCloseAt:          session.AutoCloseAt,
 		CreatedByUserID:      session.CreatedByUserID,
 		CreatedByName:        session.CreatedByName,
@@ -311,6 +358,8 @@ func (d billSessionDocument) toDomain() (domain.BillSession, error) {
 		Status:               d.Status,
 		CreatedAt:            d.CreatedAt,
 		UpdatedAt:            d.UpdatedAt,
+		ReminderAt:           d.ReminderAt,
+		ReminderSentAt:       d.ReminderSentAt,
 		AutoCloseAt:          d.AutoCloseAt,
 		CreatedByUserID:      d.CreatedByUserID,
 		CreatedByName:        d.CreatedByName,

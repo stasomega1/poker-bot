@@ -43,6 +43,7 @@ func New(cfg config.Config) (*App, error) {
 		receiptOCR = service.NewOpenAIReceiptOCR(cfg.OpenAIAPIKey, cfg.OpenAIReceiptModel)
 	}
 	billService := service.NewBillService(billRepo, chatRepo, receiptOCR)
+	billService.SetReminderAfter(cfg.BillReminderAfter)
 	billService.SetAutoCloseAfter(cfg.BillAutoCloseAfter)
 
 	bot, err := telegram.NewBot(cfg, gameService, settingsService, statsService, archiveService, billService)
@@ -127,6 +128,15 @@ func (a *App) runBillSweep(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			reminders, err := a.bill.SendDueReminders(ctx, time.Now().UTC(), 100)
+			if err != nil {
+				log.Printf("bill reminder sweep failed: %v", err)
+			} else {
+				for _, item := range reminders {
+					a.bot.PublishBillReminder(ctx, item.Session)
+				}
+			}
+
 			closed, err := a.bill.CloseExpiredSessions(ctx, time.Now().UTC(), 100)
 			if err != nil {
 				log.Printf("bill sweep failed: %v", err)
