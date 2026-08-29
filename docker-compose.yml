@@ -15,63 +15,9 @@ services:
     mem_limit: 768m
     memswap_limit: 1g
     networks:
-      - poker-bot
-
-  nginx:
-    image: nginx:1.27-alpine
-    container_name: poker-bot-nginx
-    restart: always
-    depends_on:
-      - app
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./deploy/nginx/templates:/etc/nginx/templates:ro
-      - ./deploy/nginx/snippets:/etc/nginx/snippets:ro
-      - ./deploy/nginx/start-nginx.sh:/start-nginx.sh:ro
-      - ./deploy/nginx/reload-watch.sh:/reload-watch.sh:ro
-      - certbot-www:/var/www/certbot
-      - letsencrypt:/etc/letsencrypt
-    environment:
-      SERVER_NAME: ${SERVER_NAME}
-    command: /bin/sh /start-nginx.sh
-    networks:
-      - poker-bot
-
-  certbot:
-    image: certbot/certbot:latest
-    container_name: poker-bot-certbot
-    profiles:
-      - tools
-    volumes:
-      - certbot-www:/var/www/certbot
-      - letsencrypt:/etc/letsencrypt
-    networks:
-      - poker-bot
-
-  certbot-renew:
-    image: certbot/certbot:latest
-    container_name: poker-bot-certbot-renew
-    restart: always
-    depends_on:
-      - nginx
-    entrypoint:
-      - /bin/sh
-      - /renew-loop.sh
-    environment:
-      CHECK_INTERVAL_SECONDS: 43200
-    volumes:
-      - ./deploy/certbot/renew-loop.sh:/renew-loop.sh:ro
-      - certbot-www:/var/www/certbot
-      - letsencrypt:/etc/letsencrypt
-    networks:
-      - poker-bot
+      - proxy
 
 networks:
-  poker-bot:
-    driver: bridge
-
-volumes:
-  certbot-www:
-  letsencrypt:
+  proxy:
+    external: true
+    name: stas-nginx_proxy

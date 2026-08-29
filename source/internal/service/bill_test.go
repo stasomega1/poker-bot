@@ -6,12 +6,32 @@ import (
 	"time"
 
 	"poker-bot/internal/domain"
+	mongorepo "poker-bot/internal/repository/mongo"
 
 	"github.com/shopspring/decimal"
 )
 
 type fakeBillSessionRepository struct {
-	session domain.BillSession
+	session        domain.BillSession
+	expiredSession []domain.BillSession
+}
+
+type fakeAllowedChatRepository struct{}
+
+func (r *fakeAllowedChatRepository) CreateIfMissing(ctx context.Context, chat domain.AllowedChat) error {
+	return nil
+}
+
+func (r *fakeAllowedChatRepository) FindActiveByChatID(ctx context.Context, chatID int64) (domain.AllowedChat, error) {
+	return domain.AllowedChat{ChatID: chatID, Title: "Test Chat"}, nil
+}
+
+func (r *fakeAllowedChatRepository) ListActive(ctx context.Context) ([]domain.AllowedChat, error) {
+	return nil, nil
+}
+
+func (r *fakeAllowedChatRepository) UpdateBuyInPrice(ctx context.Context, chatID int64, title string, price decimal.Decimal) (domain.AllowedChat, error) {
+	return domain.AllowedChat{ChatID: chatID, Title: title, BuyInPriceKZT: price}, nil
 }
 
 func (r *fakeBillSessionRepository) Create(ctx context.Context, session domain.BillSession) (domain.BillSession, error) {
@@ -20,11 +40,18 @@ func (r *fakeBillSessionRepository) Create(ctx context.Context, session domain.B
 }
 
 func (r *fakeBillSessionRepository) FindActiveByChatID(ctx context.Context, chatID int64) (domain.BillSession, error) {
+	if r.session.ID == "" && r.session.Status == "" {
+		return domain.BillSession{}, mongorepo.ErrBillSessionNotFound
+	}
 	return r.session, nil
 }
 
 func (r *fakeBillSessionRepository) FindLatestByChatIDsAndUserID(ctx context.Context, chatIDs []int64, userID int64) (domain.BillSession, error) {
 	return r.session, nil
+}
+
+func (r *fakeBillSessionRepository) FindExpiredActive(ctx context.Context, before time.Time, limit int) ([]domain.BillSession, error) {
+	return append([]domain.BillSession(nil), r.expiredSession...), nil
 }
 
 func (r *fakeBillSessionRepository) Update(ctx context.Context, session domain.BillSession) error {
@@ -191,5 +218,74 @@ func TestSetExpectedParticipantsRecalculatesRemaining(t *testing.T) {
 	}
 	if session.Items[0].Remaining != 1 {
 		t.Fatalf("expected remaining 1, got %d", session.Items[0].Remaining)
+	}
+}
+
+func TestCreateDebugReceiptSetsAutoCloseAt(t *testing.T) {
+	repo := &fakeBillSessionRepository{}
+	service := NewBillService(repo, &fakeAllowedChatRepository{}, nil)
+	service.SetAutoCloseAfter(72 * time.Hour)
+
+	before := time.Now().UTC()
+	session, err := service.CreateDebugReceipt(context.Background(), 123, "Test Chat", 10, "Creator", 20, "Payer")
+	if err != nil {
+		t.Fatalf("CreateDebugReceipt returned error: %v", err)
+	}
+
+	if session.AutoCloseAt.IsZero() {
+		t.Fatal("expected auto close time to be set")
+	}
+	minExpected := before.Add(72 * time.Hour).Add(-2 * time.Second)
+	maxExpected := before.Add(72 * time.Hour).Add(2 * time.Second)
+	if session.AutoCloseAt.Before(minExpected) || session.AutoCloseAt.After(maxExpected) {
+		t.Fatalf("unexpected auto close time: %s", session.AutoCloseAt)
+	}
+}
+
+func TestCloseExpiredSessionsFinishesAssignedBillsAndCancelsEmptyBills(t *testing.T) {
+	repo := &fakeBillSessionRepository{
+		expiredSession: []domain.BillSession{
+			{
+				ID:            "bill-finished",
+				Status:        domain.BillSessionActive,
+				ItemsSubtotal: decimal.NewFromInt(1000),
+				ServiceAmount: decimal.NewFromInt(100),
+				Items: []domain.BillItem{
+					{Index: 1, Name: "Tea", Quantity: 1, UnitPrice: decimal.NewFromInt(1000), LineTotal: decimal.NewFromInt(1000), Assigned: 1, Remaining: 0},
+				},
+				Assignments: []domain.BillAssignment{
+					{UserID: 10, UserName: "A", ItemIndex: 1, Quantity: 1},
+				},
+			},
+			{
+				ID:     "bill-cancelled",
+				Status: domain.BillSessionActive,
+				Items: []domain.BillItem{
+					{Index: 1, Name: "Coffee", Quantity: 1, UnitPrice: decimal.NewFromInt(900), LineTotal: decimal.NewFromInt(900), Assigned: 0, Remaining: 1},
+				},
+			},
+		},
+	}
+	service := NewBillService(repo, nil, nil)
+
+	closed, err := service.CloseExpiredSessions(context.Background(), time.Now().UTC(), 10)
+	if err != nil {
+		t.Fatalf("CloseExpiredSessions returned error: %v", err)
+	}
+	if len(closed) != 2 {
+		t.Fatalf("expected 2 closed sessions, got %d", len(closed))
+	}
+
+	if closed[0].Session.Status != domain.BillSessionFinished {
+		t.Fatalf("expected first bill to be finished, got %s", closed[0].Session.Status)
+	}
+	if len(closed[0].Summary) != 1 {
+		t.Fatalf("expected first bill summary to be generated, got %d rows", len(closed[0].Summary))
+	}
+	if closed[1].Session.Status != domain.BillSessionCancelled {
+		t.Fatalf("expected second bill to be cancelled, got %s", closed[1].Session.Status)
+	}
+	if len(closed[1].Summary) != 0 {
+		t.Fatalf("expected cancelled bill to have no summary rows, got %d", len(closed[1].Summary))
 	}
 }

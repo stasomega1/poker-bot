@@ -63,6 +63,44 @@ func (r *BillSessionRepository) FindActiveByChatID(ctx context.Context, chatID i
 	return document.toDomain()
 }
 
+func (r *BillSessionRepository) FindExpiredActive(ctx context.Context, before time.Time, limit int) ([]domain.BillSession, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+
+	cursor, err := r.collection.Find(
+		ctx,
+		bson.M{
+			"status":        domain.BillSessionActive,
+			"auto_close_at": bson.M{"$lte": before.UTC()},
+		},
+		options.Find().
+			SetSort(bson.D{{Key: "auto_close_at", Value: 1}, {Key: "created_at", Value: 1}}).
+			SetLimit(int64(limit)),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	sessions := make([]domain.BillSession, 0)
+	for cursor.Next(ctx) {
+		var document billSessionDocument
+		if err := cursor.Decode(&document); err != nil {
+			return nil, err
+		}
+		session, err := document.toDomain()
+		if err != nil {
+			return nil, err
+		}
+		sessions = append(sessions, session)
+	}
+	if err := cursor.Err(); err != nil {
+		return nil, err
+	}
+	return sessions, nil
+}
+
 func (r *BillSessionRepository) FindByID(ctx context.Context, id string) (domain.BillSession, error) {
 	objectID, err := primitive.ObjectIDFromHex(id)
 	if err != nil {
@@ -126,6 +164,7 @@ type billSessionDocument struct {
 	Status               domain.BillSessionStatus `bson:"status"`
 	CreatedAt            time.Time                `bson:"created_at"`
 	UpdatedAt            time.Time                `bson:"updated_at"`
+	AutoCloseAt          time.Time                `bson:"auto_close_at,omitempty"`
 	CreatedByUserID      int64                    `bson:"created_by_user_id"`
 	CreatedByName        string                   `bson:"created_by_name"`
 	PayerUserID          int64                    `bson:"payer_user_id"`
@@ -201,6 +240,7 @@ func billSessionDocumentFromDomain(session domain.BillSession) (billSessionDocum
 		Status:               session.Status,
 		CreatedAt:            session.CreatedAt,
 		UpdatedAt:            session.UpdatedAt,
+		AutoCloseAt:          session.AutoCloseAt,
 		CreatedByUserID:      session.CreatedByUserID,
 		CreatedByName:        session.CreatedByName,
 		PayerUserID:          session.PayerUserID,
@@ -271,6 +311,7 @@ func (d billSessionDocument) toDomain() (domain.BillSession, error) {
 		Status:               d.Status,
 		CreatedAt:            d.CreatedAt,
 		UpdatedAt:            d.UpdatedAt,
+		AutoCloseAt:          d.AutoCloseAt,
 		CreatedByUserID:      d.CreatedByUserID,
 		CreatedByName:        d.CreatedByName,
 		PayerUserID:          d.PayerUserID,

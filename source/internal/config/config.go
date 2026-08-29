@@ -22,6 +22,8 @@ type Config struct {
 	HTTPAddr           string
 	WebAppBaseURL      string
 	InitDataMaxAge     time.Duration
+	BillAutoCloseAfter time.Duration
+	BillSweepInterval  time.Duration
 	WebAppDevMode      bool
 	WebAppDevUserID    int64
 	WebAppDevUsername  string
@@ -70,6 +72,18 @@ func Load() (Config, error) {
 	}
 	cfg.InitDataMaxAge = initDataMaxAge
 
+	billAutoCloseAfter, err := time.ParseDuration(strings.TrimSpace(getEnv("BILL_AUTO_CLOSE_AFTER", "0")))
+	if err != nil {
+		return Config{}, fmt.Errorf("parse BILL_AUTO_CLOSE_AFTER: %w", err)
+	}
+	cfg.BillAutoCloseAfter = billAutoCloseAfter
+
+	billSweepInterval, err := time.ParseDuration(strings.TrimSpace(getEnv("BILL_SWEEP_INTERVAL", "5m")))
+	if err != nil {
+		return Config{}, fmt.Errorf("parse BILL_SWEEP_INTERVAL: %w", err)
+	}
+	cfg.BillSweepInterval = billSweepInterval
+
 	switch {
 	case cfg.BotToken == "":
 		return Config{}, fmt.Errorf("BOT_TOKEN is required")
@@ -83,6 +97,10 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("HTTP_ADDR is required")
 	case cfg.InitDataMaxAge <= 0:
 		return Config{}, fmt.Errorf("TELEGRAM_INIT_DATA_MAX_AGE must be greater than zero")
+	case cfg.BillAutoCloseAfter < 0:
+		return Config{}, fmt.Errorf("BILL_AUTO_CLOSE_AFTER must not be negative")
+	case cfg.BillSweepInterval <= 0:
+		return Config{}, fmt.Errorf("BILL_SWEEP_INTERVAL must be greater than zero")
 	case cfg.WebAppDevMode && cfg.WebAppDevUserID == 0:
 		cfg.WebAppDevUserID = cfg.RegistrarUserID
 	}

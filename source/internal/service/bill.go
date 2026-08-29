@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"poker-bot/internal/domain"
 	"poker-bot/internal/repository"
@@ -16,10 +17,16 @@ import (
 )
 
 type BillService struct {
-	billRepo repository.BillSessionRepository
-	chatRepo repository.AllowedChatRepository
-	ocr      ReceiptOCR
-	mu       sync.Mutex
+	billRepo       repository.BillSessionRepository
+	chatRepo       repository.AllowedChatRepository
+	ocr            ReceiptOCR
+	mu             sync.Mutex
+	autoCloseAfter time.Duration
+}
+
+type AutoClosedBill struct {
+	Session domain.BillSession
+	Summary []domain.BillParticipantSummary
 }
 
 func NewBillService(billRepo repository.BillSessionRepository, chatRepo repository.AllowedChatRepository, ocr ReceiptOCR) *BillService {
@@ -28,6 +35,13 @@ func NewBillService(billRepo repository.BillSessionRepository, chatRepo reposito
 		chatRepo: chatRepo,
 		ocr:      ocr,
 	}
+}
+
+func (s *BillService) SetAutoCloseAfter(value time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.autoCloseAfter = value
 }
 
 func (s *BillService) CreateFromReceipt(ctx context.Context, chatID int64, chatTitle string, creatorUserID int64, creatorName string, payerUserID int64, payerName string, photoFileID string, photoMessageID int, image []byte, mimeType string, onRetry func()) (domain.BillSession, error) {
@@ -97,6 +111,9 @@ func (s *BillService) createSessionFromParsedReceipt(ctx context.Context, chatID
 		ServiceAmount:        parsed.ServiceAmount,
 		TotalAmount:          parsed.TotalAmount,
 		ItemsSubtotal:        itemsSubtotal,
+	}
+	if s.autoCloseAfter > 0 {
+		session.AutoCloseAt = time.Now().UTC().Add(s.autoCloseAfter)
 	}
 
 	return s.billRepo.Create(ctx, session)
@@ -482,6 +499,41 @@ func (s *BillService) LatestUserSummary(ctx context.Context, chatIDs []int64, us
 	}
 
 	return domain.BillSession{}, domain.BillParticipantSummary{}, fmt.Errorf("для вас не найдено ни одного счета")
+}
+
+func (s *BillService) CloseExpiredSessions(ctx context.Context, now time.Time, limit int) ([]AutoClosedBill, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	expired, err := s.billRepo.FindExpiredActive(ctx, now.UTC(), limit)
+	if err != nil {
+		return nil, err
+	}
+
+	results := make([]AutoClosedBill, 0, len(expired))
+	for _, session := range expired {
+		if session.Status != domain.BillSessionActive {
+			continue
+		}
+
+		var summary []domain.BillParticipantSummary
+		if len(session.Assignments) == 0 {
+			session.Status = domain.BillSessionCancelled
+		} else {
+			summary = s.calculateSummary(session)
+			session.Status = domain.BillSessionFinished
+		}
+
+		if err := s.billRepo.Update(ctx, session); err != nil {
+			return nil, err
+		}
+		results = append(results, AutoClosedBill{
+			Session: session,
+			Summary: summary,
+		})
+	}
+
+	return results, nil
 }
 
 func (s *BillService) calculateSummary(session domain.BillSession) []domain.BillParticipantSummary {

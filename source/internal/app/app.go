@@ -3,8 +3,10 @@ package app
 import (
 	"context"
 	"log"
+	"time"
 
 	"poker-bot/internal/config"
+	"poker-bot/internal/domain"
 	mongostorage "poker-bot/internal/repository/mongo"
 	"poker-bot/internal/service"
 	"poker-bot/internal/telegram"
@@ -12,9 +14,11 @@ import (
 )
 
 type App struct {
-	bot       *telegram.Bot
-	webServer *webapp.Server
-	client    *mongostorage.Client
+	bot               *telegram.Bot
+	webServer         *webapp.Server
+	client            *mongostorage.Client
+	bill              *service.BillService
+	billSweepInterval time.Duration
 }
 
 func New(cfg config.Config) (*App, error) {
@@ -39,6 +43,7 @@ func New(cfg config.Config) (*App, error) {
 		receiptOCR = service.NewOpenAIReceiptOCR(cfg.OpenAIAPIKey, cfg.OpenAIReceiptModel)
 	}
 	billService := service.NewBillService(billRepo, chatRepo, receiptOCR)
+	billService.SetAutoCloseAfter(cfg.BillAutoCloseAfter)
 
 	bot, err := telegram.NewBot(cfg, gameService, settingsService, statsService, archiveService, billService)
 	if err != nil {
@@ -69,9 +74,11 @@ func New(cfg config.Config) (*App, error) {
 	}
 
 	return &App{
-		bot:       bot,
-		webServer: webServer,
-		client:    client,
+		bot:               bot,
+		webServer:         webServer,
+		client:            client,
+		bill:              billService,
+		billSweepInterval: cfg.BillSweepInterval,
 	}, nil
 }
 
@@ -94,6 +101,7 @@ func (a *App) Run(ctx context.Context) error {
 	defer cancel()
 
 	errCh := make(chan error, 2)
+	go a.runBillSweep(runCtx)
 	go func() {
 		errCh <- a.webServer.Run(runCtx)
 	}()
@@ -104,6 +112,36 @@ func (a *App) Run(ctx context.Context) error {
 	err := <-errCh
 	cancel()
 	return err
+}
+
+func (a *App) runBillSweep(ctx context.Context) {
+	if a.bill == nil || a.billSweepInterval <= 0 {
+		return
+	}
+
+	ticker := time.NewTicker(a.billSweepInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			closed, err := a.bill.CloseExpiredSessions(ctx, time.Now().UTC(), 100)
+			if err != nil {
+				log.Printf("bill sweep failed: %v", err)
+				continue
+			}
+			for _, item := range closed {
+				a.bot.RefreshBillMessage(ctx, item.Session)
+				if item.Session.Status == domain.BillSessionFinished {
+					a.bot.PublishBillFinished(ctx, item.Session, item.Summary)
+					continue
+				}
+				a.bot.PublishBillCancelled(ctx, item.Session)
+			}
+		}
+	}
 }
 
 func (a *App) Close(ctx context.Context) error {

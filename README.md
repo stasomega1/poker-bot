@@ -208,66 +208,51 @@ WEBAPP_BASE_URL=http://127.0.0.1:8080
 WEBAPP_DEV_MODE=true
 WEBAPP_DEV_USER_ID=202999546
 WEBAPP_DEV_USERNAME=your_username
+BILL_AUTO_CLOSE_AFTER=0
+BILL_SWEEP_INTERVAL=5m
 ```
+
+`BILL_AUTO_CLOSE_AFTER` задаёт срок жизни активного счёта (`72h`, например). Значение `0` отключает автозакрытие. `BILL_SWEEP_INTERVAL` задаёт период проверки просроченных счетов.
 
 В этом режиме страница `/app/` на `127.0.0.1` работает без Telegram init data.  
 Это только для локальной отладки.
 
 ## Docker deploy
 
-Production-контур:
+Production-контур приложения:
 
 - `app` — Go-приложение
-- `nginx` — reverse proxy и TLS termination
-- `certbot-renew` — контейнер для автоматического обновления сертификата
+- внешний shared reverse proxy — отдельный проект, который владеет `80/443` и TLS
+- сертификаты и renew живут в отдельном proxy stack
 
 Нужны env-переменные:
 
 ```text
-SERVER_NAME=bot.example.com
 WEBAPP_BASE_URL=https://bot.example.com
 HTTP_ADDR=0.0.0.0:8080
 ```
 
-В репозитории есть:
+В этом репозитории для контейнеризации приложения используются:
 
 - [docker-compose.yml](/E:/gohome/pocker-bot-app/docker-compose.yml)
-- [http-only.conf.template](/E:/gohome/pocker-bot-app/deploy/nginx/templates/http-only.conf.template)
-- [https.conf.template](/E:/gohome/pocker-bot-app/deploy/nginx/templates/https.conf.template)
-- [start-nginx.sh](/E:/gohome/pocker-bot-app/deploy/nginx/start-nginx.sh)
-- [reload-watch.sh](/E:/gohome/pocker-bot-app/deploy/nginx/reload-watch.sh)
-- [renew-loop.sh](/E:/gohome/pocker-bot-app/deploy/certbot/renew-loop.sh)
-- [ssl.conf](/E:/gohome/pocker-bot-app/deploy/nginx/snippets/ssl.conf)
+- [Dockerfile](/E:/gohome/pocker-bot-app/Dockerfile)
 
-Порядок запуска:
+Legacy nginx/certbot-файлы в `deploy/` сохранены только как reference.
 
-1. Привязать `A`-запись домена к IP сервера.
-2. Открыть порты `80` и `443`.
-3. Поднять приложение и инфраструктуру:
+Порядок production-запуска теперь такой:
+
+1. Поднять shared reverse proxy в отдельном проекте.
+2. Убедиться, что создана внешняя Docker-сеть `stas-nginx_proxy`.
+3. Поднять приложение:
 
 ```bash
-docker compose up -d --build app nginx certbot-renew
+docker compose up -d --build app
 ```
 
-4. Выпустить сертификат Let's Encrypt:
+4. Добавить доменный конфиг в shared proxy и направить upstream на контейнер `poker-bot-app:8080`.
+5. Выпустить сертификат Let's Encrypt уже из proxy-проекта.
 
-```bash
-docker compose run --rm certbot certonly \
-  --webroot \
-  -w /var/www/certbot \
-  -d bot.example.com \
-  --email you@example.com \
-  --agree-tos \
-  --no-eff-email
-```
-
-5. Перезапустить nginx:
-
-```bash
-docker compose restart nginx
-```
-
-После этого Mini App должен открываться по `https://<SERVER_NAME>/app/`.
+После этого Mini App должен открываться по `https://<domain>/app/`.
 
 ## Архив
 

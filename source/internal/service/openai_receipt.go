@@ -317,10 +317,8 @@ func buildReceiptVariants(source []byte) ([]receiptImageVariant, error) {
 		Label string
 		Image image.Image
 	}{
-		{Label: "original", Image: base},
-		{Label: "enhanced", Image: enhanced},
-		{Label: "enhanced_rotated_minus_10", Image: imaging.Rotate(enhanced, -10, color.NRGBA{R: 255, G: 255, B: 255, A: 255})},
-		{Label: "enhanced_rotated_plus_10", Image: imaging.Rotate(enhanced, 10, color.NRGBA{R: 255, G: 255, B: 255, A: 255})},
+		{Label: "enhanced_rotated_minus_15", Image: imaging.Rotate(enhanced, -15, color.NRGBA{R: 255, G: 255, B: 255, A: 255})},
+		{Label: "enhanced_rotated_plus_15", Image: imaging.Rotate(enhanced, 15, color.NRGBA{R: 255, G: 255, B: 255, A: 255})},
 	}
 
 	variants := make([]receiptImageVariant, 0, len(variantImages))

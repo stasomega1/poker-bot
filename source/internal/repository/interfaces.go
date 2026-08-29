@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"time"
 
 	"poker-bot/internal/domain"
 
@@ -38,6 +39,7 @@ type ArchiveRepository interface {
 type BillSessionRepository interface {
 	Create(ctx context.Context, session domain.BillSession) (domain.BillSession, error)
 	FindActiveByChatID(ctx context.Context, chatID int64) (domain.BillSession, error)
+	FindExpiredActive(ctx context.Context, before time.Time, limit int) ([]domain.BillSession, error)
 	FindLatestByChatIDsAndUserID(ctx context.Context, chatIDs []int64, userID int64) (domain.BillSession, error)
 	Update(ctx context.Context, session domain.BillSession) error
 	FindByID(ctx context.Context, id string) (domain.BillSession, error)
